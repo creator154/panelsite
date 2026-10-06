@@ -36,7 +36,7 @@ button:hover{background:#1d4ed8}
         <button onclick="handleLogin()">Login</button>
     </div>
 
-    <!-- 2. DASHBOARD (Tests vs DPPs) -->
+    <!-- 2. DASHBOARD -->
     <div class="card hidden" id="dashboardCard">
         <div class="header-flex">
             <h2>Test Series Uploader</h2>
@@ -70,14 +70,13 @@ button:hover{background:#1d4ed8}
 let currentAuthToken = '';
 let activeContentType = 'tests';
 
-async function handleLogin() {
+function handleLogin() {
     const token = document.getElementById('authToken').value.trim();
     if(!token) {
         alert("Please enter a valid auth token");
         return;
     }
     currentAuthToken = token;
-    // Switch to Dashboard
     document.getElementById('loginCard').classList.add('hidden');
     document.getElementById('dashboardCard').classList.remove('hidden');
 }
@@ -107,7 +106,6 @@ async function fetchBatches(type) {
     container.innerHTML = "Fetching batches...";
 
     try {
-        // Calling backend proxy to get user batches using the token
         const res = await fetch('/api/proxy/users/batches', {
             headers: { 'authorization': `Bearer ${currentAuthToken}` }
         });
@@ -159,7 +157,7 @@ async function loadBatchContent(batchId, batchName) {
             return;
         }
 
-        tests.forEach((t, idx) => {
+        tests.forEach((t) => {
             const item = document.createElement('div');
             item.className = 'test-item';
             item.innerHTML = `
