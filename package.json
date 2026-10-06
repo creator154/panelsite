@@ -1,7 +1,7 @@
 {
-  "name": "zxsite-auto",
+  "name": "zxsite-admin-integrated",
   "version": "1.0.0",
-  "description": "Auto-updating Exam Platform",
+  "description": "Exam Preparation Platform with Admin Panel",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
