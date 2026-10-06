@@ -7,14 +7,16 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static files from frontend/public
 app.use(express.static(path.join(__dirname, 'frontend/public')));
 
-// Explicit route for admin login page
+// Explicit route for Admin Panel
 app.get('/login', (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend/public/admin.html'));
 });
 
-// Proxy endpoint to fetch batches or tests dynamically using token
+// Proxy route for API requests
 app.get('/api/proxy/:endpoint(*)', async (req, res) => {
     const token = req.headers['authorization'] || process.env.PW_JWT_TOKEN || '';
     const targetUrl = `https://api.penpencil.xyz/v1/${req.params.endpoint}`;
@@ -31,13 +33,13 @@ app.get('/api/proxy/:endpoint(*)', async (req, res) => {
         res.json(response.data);
     } catch (err) {
         res.status(500).json({ 
-            error: "Failed to fetch data from upstream", 
+            error: "Proxy fetch failed", 
             details: err.response?.data || err.message 
         });
     }
 });
 
-// Catch-all route for student frontend
+// Default fallback to student portal
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend/public/index.html'));
 });
