@@ -3,69 +3,176 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ZX - Admin Panel</title>
+<title>Test Uploader - Admin Panel</title>
 <style>
-body{margin:0;font-family:system-ui,sans-serif;background:#f0f2f5;color:#333;display:flex;justify-content:center;align-items:center;height:100vh}
-.box{background:#fff;padding:30px;border-radius:12px;box-shadow:0 4px 15px rgba(0,0,0,.1);width:100%;max-width:400px}
-h2{margin-top:0;color:#4f46e5;text-align:center}
-input,button{width:100%;padding:12px;margin:10px 0;border:1px solid #ccc;border-radius:6px;font-size:1rem;box-sizing:border-box}
-button{background:#4f46e5;color:#fff;border:0;font-weight:600;cursor:pointer}
-button:hover{background:#4338ca}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#f4f6f9;color:#333}
+.container{max-width:800px;margin:30px auto;padding:0 16px}
+.card{background:#fff;padding:24px;border-radius:12px;box-shadow:0 4px 15px rgba(0,0,0,.06);margin-bottom:16px}
+h2{margin-top:0;color:#2c3e50;text-align:center}
+input,select,button{width:100%;padding:12px 14px;margin:8px 0 16px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem}
+button{background:#2563eb;color:#fff;border:0;font-weight:600;cursor:pointer}
+button:hover{background:#1d4ed8}
+.btn-success{background:#16a34a}
+.btn-success:hover{background:#15803d}
+.btn-danger{background:#dc2626;color:#fff;border:0;padding:8px 16px;border-radius:6px;cursor:pointer;width:auto}
+.header-flex{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.batch-item, .test-item{display:flex;justify-content:space-between;align-items:center;background:#f9fafb;padding:14px;border-radius:8px;margin-bottom:10px;border:1px solid #e5e7eb}
 .hidden{display:none}
 </style>
 </head>
 <body>
 
-<div class="box" id="loginBox">
-    <h2>Admin Login</h2>
-    <input type="text" id="username" placeholder="Username (default: admin)">
-    <input type="password" id="password" placeholder="Password (default: admin123)">
-    <button onclick="login()">Login</button>
-</div>
+<div class="container">
+    <!-- 1. LOGIN SCREEN -->
+    <div class="card" id="loginCard">
+        <h2>Test Uploader - Login</h2>
+        <label>Auth Token</label>
+        <input type="text" id="authToken" placeholder="Enter your auth token">
+        <label>Role</label>
+        <select id="roleSelect">
+            <option value="batch_uploader">Batch Uploader</option>
+        </select>
+        <button onclick="handleLogin()">Login</button>
+    </div>
 
-<div class="box hidden" id="dashboardBox">
-    <h2>Update Batch Data</h2>
-    <input type="text" id="batchId" placeholder="Enter Batch ID (e.g. 6779345c20fa...)">
-    <input type="text" id="testName" placeholder="Test / DPP Name">
-    <input type="text" id="testLink" placeholder="Test Link / PDF URL">
-    <button onclick="updateBatch()">Publish Update</button>
-    <p id="msg" style="text-align:center;font-weight:600;color:green;"></p>
+    <!-- 2. DASHBOARD (Tests vs DPPs) -->
+    <div class="card hidden" id="dashboardCard">
+        <div class="header-flex">
+            <h2>Test Series Uploader</h2>
+            <button class="btn-danger" onclick="logout()">Logout</button>
+        </div>
+        <p style="text-align:center;color:#666;margin-bottom:24px">Upload and manage your test series content</p>
+        <button onclick="fetchBatches('tests')" style="background:#2563eb;padding:18px;font-size:1.1rem">Tests (Upload regular tests)</button>
+        <button onclick="fetchBatches('dpps')" class="btn-success" style="padding:18px;font-size:1.1rem">DPPs (Upload daily practice problems)</button>
+    </div>
+
+    <!-- 3. BATCHES LIST SCREEN -->
+    <div class="card hidden" id="batchesCard">
+        <div class="header-flex">
+            <h2 id="batchListTitle">Your Batches</h2>
+            <button class="btn-danger" onclick="showDashboard()">Back to Dashboard</button>
+        </div>
+        <div id="batchesList">Loading batches...</div>
+    </div>
+
+    <!-- 4. TESTS UPLOADER SCREEN -->
+    <div class="card hidden" id="testsCard">
+        <div class="header-flex">
+            <h2>Available Tests</h2>
+            <button class="btn-danger" onclick="backToBatches()">Back to Batches</button>
+        </div>
+        <div id="testsList">Loading tests...</div>
+    </div>
 </div>
 
 <script>
-async function login() {
-    const u = document.getElementById('username').value;
-    const p = document.getElementById('password').value;
-    const res = await fetch('/api/admin/login', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({username: u, password: p})
-    });
-    const data = await res.json();
-    if(data.success) {
-        document.getElementById('loginBox').classList.add('hidden');
-        document.getElementById('dashboardBox').classList.remove('hidden');
-    } else {
-        alert("Wrong credentials!");
+let currentAuthToken = '';
+let activeContentType = 'tests';
+
+async function handleLogin() {
+    const token = document.getElementById('authToken').value.trim();
+    if(!token) {
+        alert("Please enter a valid auth token");
+        return;
+    }
+    currentAuthToken = token;
+    // Switch to Dashboard
+    document.getElementById('loginCard').classList.add('hidden');
+    document.getElementById('dashboardCard').classList.remove('hidden');
+}
+
+function logout() {
+    currentAuthToken = '';
+    document.getElementById('authToken').value = '';
+    document.getElementById('dashboardCard').classList.add('hidden');
+    document.getElementById('loginCard').classList.remove('hidden');
+}
+
+function showDashboard() {
+    document.getElementById('batchesCard').classList.add('hidden');
+    document.getElementById('dashboardCard').classList.remove('hidden');
+}
+
+function backToBatches() {
+    document.getElementById('testsCard').classList.add('hidden');
+    document.getElementById('batchesCard').classList.remove('hidden');
+}
+
+async function fetchBatches(type) {
+    activeContentType = type;
+    document.getElementById('dashboardCard').classList.add('hidden');
+    document.getElementById('batchesCard').classList.remove('hidden');
+    const container = document.getElementById('batchesList');
+    container.innerHTML = "Fetching batches...";
+
+    try {
+        // Calling backend proxy to get user batches using the token
+        const res = await fetch('/api/proxy/users/batches', {
+            headers: { 'authorization': `Bearer ${currentAuthToken}` }
+        });
+        const data = await res.json();
+        
+        container.innerHTML = '';
+        const batches = data.data || data.batches || [];
+        
+        if(batches.length === 0) {
+            container.innerHTML = '<p>No batches found for this token.</p>';
+            return;
+        }
+
+        batches.forEach(b => {
+            const item = document.createElement('div');
+            item.className = 'batch-item';
+            item.innerHTML = `
+                <div>
+                    <strong>${b.batchName || b.name}</strong>
+                    <div style="font-size:0.85rem;color:#666">Status: ${b.status || 'Paid'}</div>
+                </div>
+                <button style="width:auto;margin:0;padding:8px 14px" onclick="loadBatchContent('${b._id || b.id}', '${b.batchName || b.name}')">View Tests</button>
+            `;
+            container.appendChild(item);
+        });
+    } catch (err) {
+        container.innerHTML = '<p style="color:red">Failed to load batches. Check token.</p>';
     }
 }
 
-async function updateBatch() {
-    const batchId = document.getElementById('batchId').value;
-    const testName = document.getElementById('testName').value;
-    const testLink = document.getElementById('testLink').value;
+async function loadBatchContent(batchId, batchName) {
+    document.getElementById('batchesCard').classList.add('hidden');
+    document.getElementById('testsCard').classList.remove('hidden');
+    const container = document.getElementById('testsList');
+    container.innerHTML = "Loading tests...";
 
-    const res = await fetch('/api/admin/update', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({batchId, testName, testLink})
-    });
-    const data = await res.json();
-    if(data.success) {
-        document.getElementById('msg').innerText = "Successfully Updated!";
-        setTimeout(() => document.getElementById('msg').innerText = "", 3000);
-    } else {
-        alert("Error updating batch");
+    try {
+        const endpoint = activeContentType === 'dpps' ? `batches/${batchId}/dpps` : `batches/${batchId}/tests`;
+        const res = await fetch(`/api/proxy/${endpoint}`, {
+            headers: { 'authorization': `Bearer ${currentAuthToken}` }
+        });
+        const data = await res.json();
+
+        container.innerHTML = '';
+        const tests = data.data || data.tests || [];
+
+        if(tests.length === 0) {
+            container.innerHTML = '<p>No content available in this batch yet.</p>';
+            return;
+        }
+
+        tests.forEach((t, idx) => {
+            const item = document.createElement('div');
+            item.className = 'test-item';
+            item.innerHTML = `
+                <div>
+                    <strong>${t.name || t.title}</strong>
+                    <div style="font-size:0.85rem;color:#666">Start Time: ${t.startTime ? new Date(t.startTime).toLocaleString() : 'N/A'}</div>
+                </div>
+                <button class="btn-success" style="width:auto;margin:0;padding:8px 14px" onclick="alert('Test uploaded successfully!')">Upload Test</button>
+            `;
+            container.appendChild(item);
+        });
+    } catch(err) {
+        container.innerHTML = '<p style="color:red">Failed to load content for this batch.</p>';
     }
 }
 </script>
