@@ -15,7 +15,7 @@ header p{margin:12px 0 0;font-size:1.05rem}
 .bar{position:sticky;top:0;z-index:20;background:#fff;padding:12px 16px;display:flex;align-items:center;gap:14px;box-shadow:0 6px 18px rgba(0,0,0,.08)}
 .menu-btn{position:relative;background:none;border:0;padding:4px;cursor:pointer}
 .menu-btn i{display:block;width:24px;height:4px;border-radius:2px;background:#2c3e50;margin:5px 0}
-.bar input{flex:1;min-width:0;border:2px solid #3498db;border-radius:30px;padding:10px 16px;font-size:1rem;outline:none}
+.bar input{flex:1;min-width:0;border:2px solid #3498db;border-radius:30px;padding:10px 16px;font-size:1.05rem;outline:none}
 main{padding:18px 16px 110px;max-width:900px;margin:0 auto}
 .card{background:#fff;border-radius:16px;box-shadow:0 6px 20px rgba(0,0,0,.07);margin-bottom:16px;overflow:hidden}
 .card>button{width:100%;display:flex;justify-content:space-between;align-items:center;background:none;border:0;padding:22px 20px;cursor:pointer;font:inherit}
@@ -24,10 +24,9 @@ main{padding:18px 16px 110px;max-width:900px;margin:0 auto}
 .card.open .chev{transform:rotate(180deg)}
 .body{display:none;padding:0 16px 16px}
 .card.open .body{display:block}
+.body h3{margin:12px 0 8px;color:#666;font-size:.95rem}
 .body a{display:block;padding:12px 14px;margin-bottom:6px;background:#f8f9fa;border-radius:10px;font-weight:600;font-size:.95rem}
 .body a:hover{background:#eaf4fc;color:#2980b9}
-#results h2{color:#3498db;margin:0 0 10px;font-size:1.2rem}
-#results a{display:block;padding:16px;margin-bottom:6px;background:#fff;border-radius:10px}
 </style>
 </head>
 <body>
@@ -40,15 +39,44 @@ main{padding:18px 16px 110px;max-width:900px;margin:0 auto}
   <input id="q" type="search" placeholder="Search batches..." autocomplete="off">
 </div>
 <main>
-  <div id="results" hidden></div>
   <div id="app"></div>
 </main>
 <script>
 var SECTIONS=[
- ["Boards Level Tests", [["For 12th", [["697cddabf050baa08837223e","PARISHRAM 2027 (Class 12th)"]]]]],
- ["JEE Tests", [["For 12th", [["6779345c20fa0756e4a7fd08","Lakshya JEE 2027"]]]]],
- ["NEET Tests", [["For Dropper", [["69897f0a4c12aeb013d4ea52","Yakeen NEET 2027"]]]]]
+ ["Boards Level Tests",[
+  ["For 12th",[
+   ["697cddabf050baa08837223e","PARISHRAM 2027 (Class 12th)"],
+   ["6a0addccb37bd88a44438c49","Parishram Reloaded 2027"]]]]],
+ ["JEE Tests",[
+  ["For 11th",[
+   ["698adab0c1c6f98cdb4b82df","Arjuna JEE Hindi 2027"]]],
+  ["For 12th",[
+   ["6779345c20fa0756e4a7fd08","Lakshya JEE 2027"],
+   ["678214ed9a04c400aad23145","Lakshya JEE Hindi 2027"]]]]],
+ ["NEET Tests",[
+  ["For 11th",[
+   ["698adaafa0f64197c39c41af","Arjuna NEET hindi 2027"],
+   ["69897f0ad7c19b7b2f7cc35f","Arjuna NEET 2027"]]],
+  ["For 12th",[
+   ["678214ed522793aab573f631","Lakshya NEET Hindi 2027"],
+   ["698ecf6afdd825b650c9c24d","Abhiyaan 700 + (NEET 2027)"],
+   ["6779346f920e596fe7f0e247","Lakshya NEET 2027"]]]]],
+ ["DROPPER Tests",[
+  ["For NEET",[
+   ["698adaafee5f29171102c9ca","Yakeen NEET Hindi 2027"],
+   ["69897f0a4c12aeb013d4ea52","Yakeen NEET 2027"],
+   ["698ec79c420af7977e9c0f9e","Yakeen NEET 3.0 2027"],
+   ["6a71ab308afeef1b907294bd","Yakeen NEET Hindi 3.0 2027"],
+   ["6a38f418034b8baed508e6e4","Yakeen NEET Hindi 2.0 2027"]]]]]
 ];
+var OTHER=[
+ ["69897f0a4c12aeb013d4ea52","Yakeen 2027"],
+ ["698ec4d979fb4aa23c1fd2c3","Yakeen 2.0 2027"],
+ ["6994351ae02b4900c7ac6906","Prayas 2.0 2027"],
+ ["698ad35209494b495cfcc9c4","Prayas 2027"],
+ ["6994351acb3c3eb967dd60f5","Prayas 3.0 2027"]
+];
+
 var app=document.getElementById("app");
 function href(b,t){return "/batch/"+b[0]+"/"+encodeURIComponent(b[1])+"/"+t}
 function card(title,groups,type){
@@ -67,6 +95,8 @@ function card(title,groups,type){
   c.appendChild(btn);c.appendChild(body);app.appendChild(c);
 }
 SECTIONS.forEach(function(s){card(s[0],s[1],"batch_test")});
+card("Other Batch Tests",[[null,OTHER]],"batch_test");
+card("Tests Series",[[null,OTHER]],"test_series");
 </script>
 </body>
 </html>
