@@ -39,53 +39,64 @@ main{padding:18px 16px 110px;max-width:900px;margin:0 auto}
   <input id="q" type="search" placeholder="Search batches..." autocomplete="off">
 </div>
 <main>
-  <div id="app">Loading platform...</div>
+  <div id="app"></div>
 </main>
 <script>
-async function loadPlatform() {
-    const app = document.getElementById("app");
-    try {
-        // Fetch batches dynamically through our backend proxy
-        const res = await fetch('/api/proxy/users/batches');
-        const data = await res.json();
-        const batches = data.data || data.batches || [];
+var SECTIONS=[
+ ["Boards Level Tests",[
+  ["For 12th",[
+   ["697cddabf050baa08837223e","PARISHRAM 2027 (Class 12th)"],
+   ["6a0addccb37bd88a44438c49","Parishram Reloaded 2027"]]]]],
+ ["JEE Tests",[
+  ["For 11th",[
+   ["698adab0c1c6f98cdb4b82df","Arjuna JEE Hindi 2027"]]],
+  ["For 12th",[
+   ["6779345c20fa0756e4a7fd08","Lakshya JEE 2027"],
+   ["678214ed9a04c400aad23145","Lakshya JEE Hindi 2027"]]]]],
+ ["NEET Tests",[
+  ["For 11th",[
+   ["698adaafa0f64197c39c41af","Arjuna NEET hindi 2027"],
+   ["69897f0ad7c19b7b2f7cc35f","Arjuna NEET 2027"]]],
+  ["For 12th",[
+   ["678214ed522793aab573f631","Lakshya NEET Hindi 2027"],
+   ["698ecf6afdd825b650c9c24d","Abhiyaan 700 + (NEET 2027)"],
+   ["6779346f920e596fe7f0e247","Lakshya NEET 2027"]]]]],
+ ["DROPPER Tests",[
+  ["For NEET",[
+   ["698adaafee5f29171102c9ca","Yakeen NEET Hindi 2027"],
+   ["69897f0a4c12aeb013d4ea52","Yakeen NEET 2027"],
+   ["698ec79c420af7977e9c0f9e","Yakeen NEET 3.0 2027"],
+   ["6a71ab308afeef1b907294bd","Yakeen NEET Hindi 3.0 2027"],
+   ["6a38f418034b8baed508e6e4","Yakeen NEET Hindi 2.0 2027"]]]]]
+];
+var OTHER=[
+ ["69897f0a4c12aeb013d4ea52","Yakeen 2027"],
+ ["698ec4d979fb4aa23c1fd2c3","Yakeen 2.0 2027"],
+ ["6994351ae02b4900c7ac6906","Prayas 2.0 2027"],
+ ["698ad35209494b495cfcc9c4","Prayas 2027"],
+ ["6994351acb3c3eb967dd60f5","Prayas 3.0 2027"]
+];
 
-        app.innerHTML = '';
-        if(batches.length === 0) {
-            app.innerHTML = '<p style="text-align:center;">No batches found.</p>';
-            return;
-        }
-
-        var cardDiv = document.createElement("div");
-        cardDiv.className = "card open";
-        
-        var btn = document.createElement("button");
-        btn.innerHTML = '<h2>Available Batches & Tests</h2><svg class="chev" viewBox="0 0 24 24"><path d="M5 9l7 7 7-7"/></svg>';
-        btn.onclick = function() { cardDiv.classList.toggle("open"); };
-        
-        var body = document.createElement("div");
-        body.className = "body";
-
-        batches.forEach(b => {
-            var a = document.createElement("a");
-            a.href = "#";
-            a.textContent = b.batchName || b.name;
-            a.onclick = (e) => {
-                e.preventDefault();
-                alert("Opening tests for: " + (b.batchName || b.name));
-            };
-            body.appendChild(a);
-        });
-
-        cardDiv.appendChild(btn);
-        cardDiv.appendChild(body);
-        app.appendChild(cardDiv);
-
-    } catch (err) {
-        app.innerHTML = '<p style="text-align:center;color:red;">Failed to load platform data.</p>';
-    }
+var app=document.getElementById("app");
+function href(b,t){return "/batch/"+b[0]+"/"+encodeURIComponent(b[1])+"/"+t}
+function card(title,groups,type){
+  var c=document.createElement("div");c.className="card";
+  var btn=document.createElement("button");
+  btn.innerHTML='<h2></h2><svg class="chev" viewBox="0 0 24 24"><path d="M5 9l7 7 7-7"/></svg>';
+  btn.firstChild.textContent=title;
+  btn.onclick=function(){c.classList.toggle("open")};
+  var body=document.createElement("div");body.className="body";
+  groups.forEach(function(g){
+    if(g[0]){var h=document.createElement("h3");h.textContent=g[0];body.appendChild(h)}
+    g[1].forEach(function(b){
+      var a=document.createElement("a");a.href=href(b,type);a.textContent=b[1];body.appendChild(a);
+    });
+  });
+  c.appendChild(btn);c.appendChild(body);app.appendChild(c);
 }
-loadPlatform();
+SECTIONS.forEach(function(s){card(s[0],s[1],"batch_test")});
+card("Other Batch Tests",[[null,OTHER]],"batch_test");
+card("Tests Series",[[null,OTHER]],"test_series");
 </script>
 </body>
 </html>
