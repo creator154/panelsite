@@ -1,1 +1,0 @@
-The public frontend remains separate. The new uploader is in /panel and is intended to be deployed as a separate app.
