@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZX - Exam Preparation Platform</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,Roboto,system-ui,-apple-system,"Segoe UI",sans-serif;background:#f4f6f9;color:#2c3e50;font-size:15px}
+a{color:inherit;text-decoration:none}
+header{background:linear-gradient(135deg,#ff7a7a,#f2545b);color:#fff;text-align:center;padding:48px 16px 80px;clip-path:polygon(0 0,100% 0,100% 88%,0 100%)}
+header h1{margin:0;font-size:clamp(2.4rem,9vw,3.6rem);font-weight:800;letter-spacing:-1px}
+header h1 span{color:#f39c12}
+header p{margin:12px 0 0;font-size:1.05rem}
+.bar{position:sticky;top:0;z-index:20;background:#fff;padding:12px 16px;display:flex;align-items:center;gap:14px;box-shadow:0 6px 18px rgba(0,0,0,.08)}
+.menu-btn{position:relative;background:none;border:0;padding:4px;cursor:pointer}
+.menu-btn i{display:block;width:24px;height:4px;border-radius:2px;background:#2c3e50;margin:5px 0}
+.bar input{flex:1;min-width:0;border:2px solid #3498db;border-radius:30px;padding:10px 16px;font-size:1rem;outline:none}
+main{padding:18px 16px 110px;max-width:900px;margin:0 auto}
+.card{background:#fff;border-radius:16px;box-shadow:0 6px 20px rgba(0,0,0,.07);margin-bottom:16px;overflow:hidden}
+.card>button{width:100%;display:flex;justify-content:space-between;align-items:center;background:none;border:0;padding:22px 20px;cursor:pointer;font:inherit}
+.card h2{margin:0;color:#3498db;font-size:1.25rem;font-weight:700;text-align:left}
+.chev{width:22px;height:22px;stroke:#2c3e50;fill:none;stroke-width:2.5;transition:transform .2s;flex:none}
+.card.open .chev{transform:rotate(180deg)}
+.body{display:none;padding:0 16px 16px}
+.card.open .body{display:block}
+.body a{display:block;padding:12px 14px;margin-bottom:6px;background:#f8f9fa;border-radius:10px;font-weight:600;font-size:.95rem}
+.body a:hover{background:#eaf4fc;color:#2980b9}
+#results h2{color:#3498db;margin:0 0 10px;font-size:1.2rem}
+#results a{display:block;padding:16px;margin-bottom:6px;background:#fff;border-radius:10px}
+</style>
+</head>
+<body>
+<header>
+  <h1><span>Z</span>X</h1>
+  <p>Your Ultimate Exam Preparation Platform</p>
+</header>
+<div class="bar">
+  <button class="menu-btn" id="mb"><i></i><i></i><i></i></button>
+  <input id="q" type="search" placeholder="Search batches..." autocomplete="off">
+</div>
+<main>
+  <div id="results" hidden></div>
+  <div id="app"></div>
+</main>
+<script>
+var SECTIONS=[
+ ["JEE Tests", [["For 12th", [["6779345c20fa0756e4a7fd08","Lakshya JEE 2027"]]]]],
+ ["NEET Tests", [["For Dropper", [["69897f0a4c12aeb013d4ea52","Yakeen NEET 2027"]]]]]
+];
+var app=document.getElementById("app");
+function href(b,t){return "/batch/"+b[0]+"/"+encodeURIComponent(b[1])+"/"+t}
+function card(title,groups,type){
+  var c=document.createElement("div");c.className="card";
+  var btn=document.createElement("button");
+  btn.innerHTML='<h2></h2><svg class="chev" viewBox="0 0 24 24"><path d="M5 9l7 7 7-7"/></svg>';
+  btn.firstChild.textContent=title;
+  btn.onclick=function(){c.classList.toggle("open")};
+  var body=document.createElement("div");body.className="body";
+  groups.forEach(function(g){
+    if(g[0]){var h=document.createElement("h3");h.textContent=g[0];body.appendChild(h)}
+    g[1].forEach(function(b){
+      var a=document.createElement("a");a.href=href(b,type);a.textContent=b[1];body.appendChild(a);
+    });
+  });
+  c.appendChild(btn);c.appendChild(body);app.appendChild(c);
+}
+SECTIONS.forEach(function(s){card(s[0],s[1],"batch_test")});
+</script>
+</body>
+</html>
