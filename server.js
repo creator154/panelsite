@@ -9,6 +9,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'frontend/public')));
 
+// Explicit route for admin login page
+app.get('/login', (req, res) => {
+    res.sendFile(path.join(__dirname, 'frontend/public/admin.html'));
+});
+
 // Proxy endpoint to fetch batches or tests dynamically using token
 app.get('/api/proxy/:endpoint(*)', async (req, res) => {
     const token = req.headers['authorization'] || process.env.PW_JWT_TOKEN || '';
@@ -32,6 +37,7 @@ app.get('/api/proxy/:endpoint(*)', async (req, res) => {
     }
 });
 
+// Catch-all route for student frontend
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend/public/index.html'));
 });
