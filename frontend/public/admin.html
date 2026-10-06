@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZX - Admin Panel</title>
+<style>
+body{margin:0;font-family:system-ui,sans-serif;background:#f0f2f5;color:#333;display:flex;justify-content:center;align-items:center;height:100vh}
+.box{background:#fff;padding:30px;border-radius:12px;box-shadow:0 4px 15px rgba(0,0,0,.1);width:100%;max-width:400px}
+h2{margin-top:0;color:#4f46e5;text-align:center}
+input,button{width:100%;padding:12px;margin:10px 0;border:1px solid #ccc;border-radius:6px;font-size:1rem;box-sizing:border-box}
+button{background:#4f46e5;color:#fff;border:0;font-weight:600;cursor:pointer}
+button:hover{background:#4338ca}
+.hidden{display:none}
+</style>
+</head>
+<body>
+
+<div class="box" id="loginBox">
+    <h2>Admin Login</h2>
+    <input type="text" id="username" placeholder="Username (default: admin)">
+    <input type="password" id="password" placeholder="Password (default: admin123)">
+    <button onclick="login()">Login</button>
+</div>
+
+<div class="box hidden" id="dashboardBox">
+    <h2>Update Batch Data</h2>
+    <input type="text" id="batchId" placeholder="Enter Batch ID (e.g. 6779345c20fa...)">
+    <input type="text" id="testName" placeholder="Test / DPP Name">
+    <input type="text" id="testLink" placeholder="Test Link / PDF URL">
+    <button onclick="updateBatch()">Publish Update</button>
+    <p id="msg" style="text-align:center;font-weight:600;color:green;"></p>
+</div>
+
+<script>
+async function login() {
+    const u = document.getElementById('username').value;
+    const p = document.getElementById('password').value;
+    const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username: u, password: p})
+    });
+    const data = await res.json();
+    if(data.success) {
+        document.getElementById('loginBox').classList.add('hidden');
+        document.getElementById('dashboardBox').classList.remove('hidden');
+    } else {
+        alert("Wrong credentials!");
+    }
+}
+
+async function updateBatch() {
+    const batchId = document.getElementById('batchId').value;
+    const testName = document.getElementById('testName').value;
+    const testLink = document.getElementById('testLink').value;
+
+    const res = await fetch('/api/admin/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({batchId, testName, testLink})
+    });
+    const data = await res.json();
+    if(data.success) {
+        document.getElementById('msg').innerText = "Successfully Updated!";
+        setTimeout(() => document.getElementById('msg').innerText = "", 3000);
+    } else {
+        alert("Error updating batch");
+    }
+}
+</script>
+</body>
+</html>
