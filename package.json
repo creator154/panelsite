@@ -1,0 +1,1 @@
+{"name":"zx-platform","private":true,"scripts":{"backend":"npm --prefix backend start","frontend":"npm --prefix frontend start","panel":"npm --prefix panel start"}}
