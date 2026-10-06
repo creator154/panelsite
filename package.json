@@ -1,7 +1,7 @@
 {
-  "name": "zxsite-admin-integrated",
+  "name": "zxsite-integrated-platform",
   "version": "1.0.0",
-  "description": "Exam Preparation Platform with Admin Panel",
+  "description": "Exam Preparation Platform with Dynamic Token Sync",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
