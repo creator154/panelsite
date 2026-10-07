@@ -59,8 +59,10 @@ if (!Batch.schema.path('sourceBatchId')) {
 
 /* ===================== PENPENCIL REQUEST ===================== */
 
-async function penpencilRequest(path) {
-  if (!PENPENCIL_API_TOKEN) {
+async function penpencilRequest(path, tokenOverride) {
+  const token = tokenOverride || PENPENCIL_API_TOKEN;
+
+  if (!token) {
     throw new Error('PENPENCIL_API_TOKEN is missing in Heroku Config Vars');
   }
 
@@ -72,7 +74,7 @@ async function penpencilRequest(path) {
   const response = await fetch(url, {
     method: 'GET',
     headers: {
-      Authorization: `Bearer ${PENPENCIL_API_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'Client-Id': PENPENCIL_CLIENT_ID,
@@ -136,7 +138,8 @@ function sign(user) {
       username: user.username,
       role: user.role,
       scope: user.scope || 'all',
-      batchIds: (user.batchIds || []).map(String)
+      batchIds: (user.batchIds || []).map(String),
+      ppToken: user.ppToken || ''
     },
     JWT_SECRET,
     { expiresIn: '7d' }
@@ -239,6 +242,70 @@ function getSourceBatchId(batch) {
   return String(batch._id || batch.id || batch.batchId || batch.batch_id || '');
 }
 
+function ppTokenOf(req) {
+  return (req.user && req.user.ppToken) || '';
+}
+
+/*
+  Login with a PenPencil token directly.
+  Token is checked against PenPencil, then only the batches
+  that token can see are given access.
+*/
+async function loginWithSourceToken(ppToken) {
+  let data;
+
+  try {
+    data = await penpencilRequest(PENPENCIL_BATCHES_PATH, ppToken);
+  } catch (e) {
+    console.error('Source token login failed:', e.message);
+    return null;
+  }
+
+  const list = sourceArray(data);
+  if (!list.length) return null;
+
+  const localIds = [];
+
+  for (const sb of list) {
+    const srcId = getSourceBatchId(sb);
+    if (!srcId) continue;
+
+    let local = await Batch.findOne({ sourceBatchId: srcId });
+
+    if (!local) {
+      local = await Batch.create({
+        name: String(sb.name || sb.title || 'Source Batch').trim(),
+        category: 'Other Batch Tests',
+        subgroup: '',
+        exam: '',
+        language: 'Hindi',
+        status: 'Paid',
+        active: true,
+        sourceBatchId: srcId
+      });
+    }
+
+    localIds.push(String(local._id));
+  }
+
+  const token = sign({
+    _id: 'source-' + hashToken(ppToken).slice(0, 12),
+    username: 'Source Token User',
+    role: 'Batch Uploader',
+    scope: 'batches',
+    batchIds: localIds,
+    ppToken
+  });
+
+  return {
+    success: true,
+    token,
+    role: 'Batch Uploader',
+    scope: 'batches',
+    batchIds: localIds
+  };
+}
+
 function contentType(param) {
   return param === 'dpp' || param === 'dpps' ? 'dpp' : 'test';
 }
@@ -266,7 +333,8 @@ app.get('/', (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { username, password, authToken } = req.body || {};
+    const { username, password } = req.body || {};
+    const authToken = String(req.body?.authToken || '').trim();
 
     if (authToken) {
       /* MASTER AUTH TOKEN */
@@ -297,10 +365,16 @@ app.post('/api/auth/login', async (req, res) => {
       }).populate('batchIds');
 
       if (!uploader) {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid or inactive auth token'
-        });
+        const sourceLogin = await loginWithSourceToken(authToken);
+
+        if (!sourceLogin) {
+          return res.status(401).json({
+            success: false,
+            message: 'Invalid or inactive auth token'
+          });
+        }
+
+        return res.json(sourceLogin);
       }
 
       const assignedBatchIds = (uploader.batchIds || [])
@@ -409,7 +483,7 @@ app.get('/api/admin/source/batches', auth, async (req, res) => {
   try {
     console.log('Loading source batches...');
 
-    const data = await penpencilRequest(PENPENCIL_BATCHES_PATH);
+    const data = await penpencilRequest(PENPENCIL_BATCHES_PATH, ppTokenOf(req));
 
     let batches = sourceArray(data);
 
@@ -451,7 +525,8 @@ app.get('/api/admin/source/batches/:batchId/details', auth, async (req, res) => 
     }
 
     const data = await penpencilRequest(
-      buildSourcePath(PENPENCIL_BATCH_DETAILS_PATH, { batchId: sourceBatchId })
+      buildSourcePath(PENPENCIL_BATCH_DETAILS_PATH, { batchId: sourceBatchId }),
+      ppTokenOf(req)
     );
 
     return res.json({ success: true, data });
@@ -474,7 +549,8 @@ app.get('/api/admin/source/batches/:batchId/tests', auth, async (req, res) => {
     }
 
     const data = await penpencilRequest(
-      buildSourcePath(PENPENCIL_TESTS_PATH, { batchId: sourceBatchId })
+      buildSourcePath(PENPENCIL_TESTS_PATH, { batchId: sourceBatchId }),
+      ppTokenOf(req)
     );
 
     return res.json({ success: true, data, items: sourceArray(data) });
@@ -497,7 +573,8 @@ app.get('/api/admin/source/batches/:batchId/dpps', auth, async (req, res) => {
     }
 
     const data = await penpencilRequest(
-      buildSourcePath(PENPENCIL_DPPS_PATH, { batchId: sourceBatchId })
+      buildSourcePath(PENPENCIL_DPPS_PATH, { batchId: sourceBatchId }),
+      ppTokenOf(req)
     );
 
     return res.json({ success: true, data, items: sourceArray(data) });
@@ -524,7 +601,8 @@ app.get('/api/admin/source/tests/:testId', auth, async (req, res) => {
     const data = await penpencilRequest(
       buildSourcePath(PENPENCIL_TEST_DETAIL_PATH, {
         testId: req.params.testId
-      })
+      }),
+      ppTokenOf(req)
     );
 
     return res.json({ success: true, data });
