@@ -16,7 +16,6 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-
 /* =====================================================
    MIDDLEWARE
 ===================================================== */
@@ -36,7 +35,6 @@ app.use(
   })
 );
 
-
 /* =====================================================
    CONFIG
 ===================================================== */
@@ -45,57 +43,76 @@ const JWT_SECRET =
   process.env.JWT_SECRET ||
   'change-this-secret';
 
-
 const PENPENCIL_API_TOKEN =
   process.env.PENPENCIL_API_TOKEN ||
   '';
 
-
 /*
-  IMPORTANT
-
-  Old:
-  https://api.penpencil.xyz/v1
-
-  New default:
-  https://api.penpencil.co/v1
-
-  You can also override this from Heroku Config Vars:
-  PENPENCIL_BASE
+  PenPencil API base.
+  Keep token only in Heroku Config Vars.
 */
 
 const PENPENCIL_BASE =
   (
     process.env.PENPENCIL_BASE ||
-    'https://api.penpencil.co/v1'
+    'https://api.penpencil.co'
   ).replace(/\/$/, '');
 
-
 /*
-  Keep source paths configurable.
+  Source batch list.
 */
 
 const PENPENCIL_BATCHES_PATH =
   process.env.PENPENCIL_BATCHES_PATH ||
-  '/users/batches?page=1&limit=50';
-
+  '/v3/batches/my-batches';
 
 /*
-  Existing Batch model may already contain this.
-  Add dynamically if not present.
+  Batch details.
+*/
+
+const PENPENCIL_BATCH_DETAILS_PATH =
+  process.env.PENPENCIL_BATCH_DETAILS_PATH ||
+  '/v3/batches/{batchId}/details';
+
+/*
+  Test list.
+
+  Can be overridden from Heroku Config Vars if your
+  authorized source account uses a different route.
+*/
+
+const PENPENCIL_TESTS_PATH =
+  process.env.PENPENCIL_TESTS_PATH ||
+  '/v3/test-service/tests/check-tests?testSource=BATCH_QUIZ&batchId={batchId}';
+
+/*
+  DPP list.
+*/
+
+const PENPENCIL_DPPS_PATH =
+  process.env.PENPENCIL_DPPS_PATH ||
+  '/v3/test-service/tests/dpp?batchId={batchId}&isSubjective=false';
+
+/*
+  Test detail.
+*/
+
+const PENPENCIL_TEST_DETAIL_PATH =
+  process.env.PENPENCIL_TEST_DETAIL_PATH ||
+  '/v3/tests/{testId}';
+
+/*
+  Existing Batch model may already contain sourceBatchId.
 */
 
 if (!Batch.schema.path('sourceBatchId')) {
-
   Batch.schema.add({
     sourceBatchId: {
       type: String,
       index: true
     }
   });
-
 }
-
 
 /* =====================================================
    PENPENCIL REQUEST
@@ -104,71 +121,54 @@ if (!Batch.schema.path('sourceBatchId')) {
 async function penpencilRequest(path) {
 
   if (!PENPENCIL_API_TOKEN) {
-
     throw new Error(
       'PENPENCIL_API_TOKEN is missing in Heroku Config Vars'
     );
-
   }
-
 
   const cleanPath =
     String(path).startsWith('/')
       ? String(path)
       : `/${path}`;
 
-
   const url =
     PENPENCIL_BASE + cleanPath;
-
 
   console.log(
     'PenPencil request:',
     url
   );
 
+  const response = await fetch(url, {
+    method: 'GET',
 
-  const response =
-    await fetch(url, {
-      method: 'GET',
+    headers: {
+      Authorization:
+        `Bearer ${PENPENCIL_API_TOKEN}`,
 
-      headers: {
+      Accept:
+        'application/json',
 
-        Authorization:
-          'Bearer ' +
-          PENPENCIL_API_TOKEN,
-
-        Accept:
-          'application/json',
-
-        'User-Agent':
-          'ZX-Batch-Uploader/1.0'
-      }
-    });
-
+      'User-Agent':
+        'ZX-Batch-Uploader/1.0'
+    }
+  });
 
   const text =
     await response.text();
 
-
   let data = {};
 
-
   try {
-
     data =
       text
         ? JSON.parse(text)
         : {};
-
   } catch {
-
     data = {
       raw: text
     };
-
   }
-
 
   if (!response.ok) {
 
@@ -178,21 +178,36 @@ async function penpencilRequest(path) {
       data
     );
 
-
     throw new Error(
       data?.message ||
       data?.error?.message ||
       data?.error ||
       `PenPencil API returned ${response.status}`
     );
+  }
+
+  return data;
+}
+
+/* =====================================================
+   PATH HELPERS
+===================================================== */
+
+function buildSourcePath(template, values = {}) {
+
+  let path = String(template);
+
+  for (const [key, value] of Object.entries(values)) {
+
+    path = path.replace(
+      new RegExp(`\\{${key}\\}`, 'g'),
+      encodeURIComponent(String(value))
+    );
 
   }
 
-
-  return data;
-
+  return path;
 }
-
 
 /* =====================================================
    HELPERS
@@ -207,13 +222,13 @@ function hashToken(token) {
 
 }
 
-
 function generateUploaderToken() {
 
-  return crypto.randomBytes(32).toString('hex');
+  return crypto
+    .randomBytes(32)
+    .toString('hex');
 
 }
-
 
 /* =====================================================
    JWT
@@ -251,7 +266,6 @@ function sign(user) {
 
 }
 
-
 /* =====================================================
    AUTH
 ===================================================== */
@@ -261,13 +275,11 @@ function auth(req, res, next) {
   const header =
     req.headers.authorization || '';
 
-
   const token =
     header.replace(
       /^Bearer\s+/i,
       ''
     );
-
 
   if (!token) {
 
@@ -282,7 +294,6 @@ function auth(req, res, next) {
 
   }
 
-
   try {
 
     req.user =
@@ -290,7 +301,6 @@ function auth(req, res, next) {
         token,
         JWT_SECRET
       );
-
 
     next();
 
@@ -309,7 +319,6 @@ function auth(req, res, next) {
 
 }
 
-
 /* =====================================================
    MASTER ONLY
 ===================================================== */
@@ -325,7 +334,6 @@ function masterOnly(req, res, next) {
 
   }
 
-
   return res.status(403).json({
 
     success: false,
@@ -337,20 +345,15 @@ function masterOnly(req, res, next) {
 
 }
 
-
 /* =====================================================
    LOCAL BATCH ACCESS
 ===================================================== */
 
-function canAccessBatch(
-  req,
-  batchId
-) {
+function canAccessBatch(req, batchId) {
 
   if (!req.user) {
     return false;
   }
-
 
   if (
     req.user.scope === 'all'
@@ -359,7 +362,6 @@ function canAccessBatch(
     return true;
 
   }
-
 
   return (
     req.user.batchIds || []
@@ -371,7 +373,6 @@ function canAccessBatch(
 
 }
 
-
 async function getAllowedBatchIds(req) {
 
   if (
@@ -382,14 +383,12 @@ async function getAllowedBatchIds(req) {
 
   }
 
-
   return (
     req.user.batchIds || []
   )
     .map(String);
 
 }
-
 
 /* =====================================================
    SOURCE BATCH ACCESS
@@ -404,7 +403,6 @@ async function canAccessSourceBatch(
     return false;
   }
 
-
   if (
     req.user.scope === 'all'
   ) {
@@ -413,17 +411,14 @@ async function canAccessSourceBatch(
 
   }
 
-
   const allowedLocalIds =
     (
       req.user.batchIds || []
     ).map(String);
 
-
   if (!allowedLocalIds.length) {
     return false;
   }
-
 
   const batch =
     await Batch.findOne({
@@ -441,11 +436,9 @@ async function canAccessSourceBatch(
 
     }).lean();
 
-
   return !!batch;
 
 }
-
 
 /* =====================================================
    ALLOWED SOURCE BATCH IDS
@@ -461,17 +454,14 @@ async function getAllowedSourceBatchIds(req) {
 
   }
 
-
   const allowedLocalIds =
     (
       req.user.batchIds || []
     ).map(String);
 
-
   if (!allowedLocalIds.length) {
     return [];
   }
-
 
   const batches =
     await Batch.find({
@@ -495,7 +485,6 @@ async function getAllowedSourceBatchIds(req) {
       )
       .lean();
 
-
   return batches
     .map(
       b =>
@@ -507,7 +496,6 @@ async function getAllowedSourceBatchIds(req) {
 
 }
 
-
 /* =====================================================
    SOURCE ARRAY NORMALIZER
 ===================================================== */
@@ -518,13 +506,11 @@ function sourceArray(data) {
     return data;
   }
 
-
   if (
     Array.isArray(data?.data)
   ) {
     return data.data;
   }
-
 
   if (
     Array.isArray(
@@ -534,7 +520,6 @@ function sourceArray(data) {
     return data.data.data;
   }
 
-
   if (
     Array.isArray(
       data?.data?.batches
@@ -542,7 +527,6 @@ function sourceArray(data) {
   ) {
     return data.data.batches;
   }
-
 
   if (
     Array.isArray(
@@ -552,7 +536,6 @@ function sourceArray(data) {
     return data.data.items;
   }
 
-
   if (
     Array.isArray(
       data?.data?.results
@@ -560,7 +543,6 @@ function sourceArray(data) {
   ) {
     return data.data.results;
   }
-
 
   if (
     Array.isArray(
@@ -570,7 +552,6 @@ function sourceArray(data) {
     return data.results;
   }
 
-
   if (
     Array.isArray(
       data?.items
@@ -578,7 +559,6 @@ function sourceArray(data) {
   ) {
     return data.items;
   }
-
 
   if (
     Array.isArray(
@@ -588,7 +568,6 @@ function sourceArray(data) {
     return data.batches;
   }
 
-
   if (
     Array.isArray(
       data?.tests
@@ -596,7 +575,6 @@ function sourceArray(data) {
   ) {
     return data.tests;
   }
-
 
   if (
     Array.isArray(
@@ -606,11 +584,9 @@ function sourceArray(data) {
     return data.dpps;
   }
 
-
   return [];
 
 }
-
 
 /* =====================================================
    SOURCE BATCH ID
@@ -621,7 +597,6 @@ function getSourceBatchId(batch) {
   if (!batch) {
     return '';
   }
-
 
   return String(
 
@@ -638,7 +613,6 @@ function getSourceBatchId(batch) {
   );
 
 }
-
 
 /* =====================================================
    HEALTH
@@ -659,7 +633,6 @@ app.get(
 
   }
 );
-
 
 /* =====================================================
    ROOT
@@ -684,7 +657,6 @@ app.get(
   }
 );
 
-
 /* =====================================================
    LOGIN
 ===================================================== */
@@ -702,10 +674,7 @@ app.post(
       } =
         req.body || {};
 
-
-      /* -----------------------------------------------
-         MASTER AUTH TOKEN
-      ------------------------------------------------ */
+      /* MASTER AUTH TOKEN */
 
       if (authToken) {
 
@@ -738,7 +707,6 @@ app.post(
 
             });
 
-
           return res.json({
 
             success:
@@ -756,16 +724,12 @@ app.post(
 
         }
 
-
-        /* ---------------------------------------------
-           SCOPED UPLOADER TOKEN
-        ---------------------------------------------- */
+        /* SCOPED UPLOADER TOKEN */
 
         const tokenHash =
           hashToken(
             authToken
           );
-
 
         const uploader =
           await UploaderToken
@@ -781,7 +745,6 @@ app.post(
               'batchIds'
             );
 
-
         if (!uploader) {
 
           return res.status(401).json({
@@ -796,7 +759,6 @@ app.post(
 
         }
 
-
         const assignedBatchIds =
           (
             uploader.batchIds || []
@@ -807,7 +769,6 @@ app.post(
             )
             .filter(Boolean)
             .map(String);
-
 
         const token =
           sign({
@@ -829,7 +790,6 @@ app.post(
 
           });
 
-
         return res.json({
 
           success:
@@ -850,10 +810,7 @@ app.post(
 
       }
 
-
-      /* ---------------------------------------------
-         USERNAME / PASSWORD
-      ---------------------------------------------- */
+      /* USERNAME / PASSWORD */
 
       if (
         !username ||
@@ -872,12 +829,10 @@ app.post(
 
       }
 
-
       const user =
         await User.findOne({
           username
         });
-
 
       if (
 
@@ -902,7 +857,6 @@ app.post(
 
       }
 
-
       const token =
         sign({
 
@@ -923,7 +877,6 @@ app.post(
 
         });
 
-
       return res.json({
 
         success:
@@ -939,14 +892,12 @@ app.post(
 
       });
 
-
     } catch (e) {
 
       console.error(
         'Login error:',
         e
       );
-
 
       return res.status(500).json({
 
@@ -962,7 +913,6 @@ app.post(
 
   }
 );
-
 
 /* =====================================================
    PUBLIC BATCHES
@@ -991,7 +941,6 @@ app.get(
 
           });
 
-
       return res.json({
 
         success:
@@ -1001,11 +950,9 @@ app.get(
 
       });
 
-
     } catch (e) {
 
       console.error(e);
-
 
       return res.status(500).json({
 
@@ -1021,7 +968,6 @@ app.get(
 
   }
 );
-
 
 /* =====================================================
    PUBLIC CONTENT
@@ -1040,9 +986,7 @@ app.get(
         req.params.type === 'dpps'
 
           ? 'dpp'
-
           : 'test';
-
 
       const items =
         await Test.find({
@@ -1066,7 +1010,6 @@ app.get(
 
           });
 
-
       return res.json({
 
         success:
@@ -1076,11 +1019,9 @@ app.get(
 
       });
 
-
     } catch (e) {
 
       console.error(e);
-
 
       return res.status(500).json({
 
@@ -1096,7 +1037,6 @@ app.get(
 
   }
 );
-
 
 /* =====================================================
    CURRENT USER
@@ -1136,7 +1076,6 @@ app.get(
   }
 );
 
-
 /* =====================================================
    SOURCE BATCHES
 ===================================================== */
@@ -1152,26 +1091,42 @@ app.get(
         'Loading source batches...'
       );
 
-
       const data =
         await penpencilRequest(
           PENPENCIL_BATCHES_PATH
         );
 
-
       let batches =
         sourceArray(data);
-
 
       console.log(
         'Source batches from API:',
         batches.length
       );
 
+      /*
+        If API returns object containing a single
+        nested list, normalize it.
+      */
 
-      /* ---------------------------------------------
-         SCOPED UPLOADER
-      ---------------------------------------------- */
+      if (!batches.length && data) {
+
+        const possible =
+          data?.data?.batches ||
+          data?.data?.items ||
+          data?.batches ||
+          data?.items ||
+          [];
+
+        if (Array.isArray(possible)) {
+          batches = possible;
+        }
+
+      }
+
+      /*
+        Scoped uploader.
+      */
 
       if (
         req.user.scope !== 'all'
@@ -1182,13 +1137,11 @@ app.get(
             req
           );
 
-
         const allowedSet =
           new Set(
             allowedSourceIds
               .map(String)
           );
-
 
         batches =
           batches.filter(
@@ -1199,15 +1152,11 @@ app.get(
                   batch
                 );
 
-
               return (
-
                 sourceId &&
-
                 allowedSet.has(
                   sourceId
                 )
-
               );
 
             }
@@ -1215,17 +1164,12 @@ app.get(
 
       }
 
-
       console.log(
-
         'Source batches returned:',
         batches.length,
-
         'scope:',
         req.user.scope
-
       );
-
 
       return res.json({
 
@@ -1238,16 +1182,12 @@ app.get(
 
       });
 
-
     } catch (e) {
 
       console.error(
-
         'PenPencil batches error:',
         e.message
-
       );
-
 
       return res.status(502).json({
 
@@ -1267,6 +1207,86 @@ app.get(
   }
 );
 
+/* =====================================================
+   SOURCE BATCH DETAILS
+===================================================== */
+
+app.get(
+  '/api/admin/source/batches/:batchId/details',
+  auth,
+  async (req, res) => {
+
+    try {
+
+      const sourceBatchId =
+        String(
+          req.params.batchId
+        );
+
+      const allowed =
+        await canAccessSourceBatch(
+          req,
+          sourceBatchId
+        );
+
+      if (!allowed) {
+
+        return res.status(403).json({
+
+          success:
+            false,
+
+          message:
+            'You do not have access to this source batch'
+
+        });
+
+      }
+
+      const path =
+        buildSourcePath(
+          PENPENCIL_BATCH_DETAILS_PATH,
+          {
+            batchId:
+              sourceBatchId
+          }
+        );
+
+      const data =
+        await penpencilRequest(
+          path
+        );
+
+      return res.json({
+
+        success:
+          true,
+
+        data
+
+      });
+
+    } catch (e) {
+
+      console.error(
+        'PenPencil batch details error:',
+        e.message
+      );
+
+      return res.status(502).json({
+
+        success:
+          false,
+
+        message:
+          e.message
+
+      });
+
+    }
+
+  }
+);
 
 /* =====================================================
    SOURCE TESTS
@@ -1284,16 +1304,11 @@ app.get(
           req.params.batchId
         );
 
-
       const allowed =
         await canAccessSourceBatch(
-
           req,
-
           sourceBatchId
-
         );
-
 
       if (!allowed) {
 
@@ -1312,24 +1327,22 @@ app.get(
 
       }
 
-
-      const id =
-        encodeURIComponent(
-          sourceBatchId
+      const path =
+        buildSourcePath(
+          PENPENCIL_TESTS_PATH,
+          {
+            batchId:
+              sourceBatchId
+          }
         );
-
 
       const data =
         await penpencilRequest(
-
-          `/batches/${id}/tests`
-
+          path
         );
-
 
       const items =
         sourceArray(data);
-
 
       return res.json({
 
@@ -1342,16 +1355,12 @@ app.get(
 
       });
 
-
     } catch (e) {
 
       console.error(
-
         'PenPencil tests error:',
         e.message
-
       );
-
 
       return res.status(502).json({
 
@@ -1370,7 +1379,6 @@ app.get(
 
   }
 );
-
 
 /* =====================================================
    SOURCE DPPs
@@ -1388,16 +1396,11 @@ app.get(
           req.params.batchId
         );
 
-
       const allowed =
         await canAccessSourceBatch(
-
           req,
-
           sourceBatchId
-
         );
-
 
       if (!allowed) {
 
@@ -1416,24 +1419,22 @@ app.get(
 
       }
 
-
-      const id =
-        encodeURIComponent(
-          sourceBatchId
+      const path =
+        buildSourcePath(
+          PENPENCIL_DPPS_PATH,
+          {
+            batchId:
+              sourceBatchId
+          }
         );
-
 
       const data =
         await penpencilRequest(
-
-          `/batches/${id}/dpps`
-
+          path
         );
-
 
       const items =
         sourceArray(data);
-
 
       return res.json({
 
@@ -1446,16 +1447,12 @@ app.get(
 
       });
 
-
     } catch (e) {
 
       console.error(
-
         'PenPencil DPP error:',
         e.message
-
       );
-
 
       return res.status(502).json({
 
@@ -1474,7 +1471,6 @@ app.get(
 
   }
 );
-
 
 /* =====================================================
    SOURCE TEST DETAILS
@@ -1494,17 +1490,13 @@ app.get(
             )
           : '';
 
-
       if (
 
         requestedBatchId &&
 
         !(await canAccessSourceBatch(
-
           req,
-
           requestedBatchId
-
         ))
 
       ) {
@@ -1521,20 +1513,19 @@ app.get(
 
       }
 
-
-      const id =
-        encodeURIComponent(
-          req.params.testId
+      const path =
+        buildSourcePath(
+          PENPENCIL_TEST_DETAIL_PATH,
+          {
+            testId:
+              req.params.testId
+          }
         );
-
 
       const data =
         await penpencilRequest(
-
-          `/tests/${id}`
-
+          path
         );
-
 
       return res.json({
 
@@ -1545,16 +1536,12 @@ app.get(
 
       });
 
-
     } catch (e) {
 
       console.error(
-
         'PenPencil test details error:',
         e.message
-
       );
-
 
       return res.status(502).json({
 
@@ -1571,7 +1558,6 @@ app.get(
   }
 );
 
-
 /* =====================================================
    ADMIN BATCHES
 ===================================================== */
@@ -1584,7 +1570,6 @@ app.get(
     try {
 
       let batches;
-
 
       if (
         req.user.scope === 'all'
@@ -1617,7 +1602,6 @@ app.get(
 
       }
 
-
       return res.json({
 
         success:
@@ -1627,11 +1611,9 @@ app.get(
 
       });
 
-
     } catch (e) {
 
       console.error(e);
-
 
       return res.status(500).json({
 
@@ -1647,7 +1629,6 @@ app.get(
 
   }
 );
-
 
 /* =====================================================
    CREATE BATCH
@@ -1696,7 +1677,6 @@ app.post(
 
         });
 
-
       return res.json({
 
         success:
@@ -1706,11 +1686,9 @@ app.post(
 
       });
 
-
     } catch (e) {
 
       console.error(e);
-
 
       return res.status(400).json({
 
@@ -1726,7 +1704,6 @@ app.post(
 
   }
 );
-
 
 /* =====================================================
    UPDATE BATCH
@@ -1759,7 +1736,6 @@ app.put(
 
         );
 
-
       if (!batch) {
 
         return res.status(404).json({
@@ -1774,7 +1750,6 @@ app.put(
 
       }
 
-
       return res.json({
 
         success:
@@ -1783,7 +1758,6 @@ app.put(
         batch
 
       });
-
 
     } catch (e) {
 
@@ -1801,7 +1775,6 @@ app.put(
 
   }
 );
-
 
 /* =====================================================
    DELETE BATCH
@@ -1822,13 +1795,9 @@ app.delete(
 
       });
 
-
       await Batch.findByIdAndDelete(
-
         req.params.id
-
       );
-
 
       return res.json({
 
@@ -1836,7 +1805,6 @@ app.delete(
           true
 
       });
-
 
     } catch (e) {
 
@@ -1854,7 +1822,6 @@ app.delete(
 
   }
 );
-
 
 /* =====================================================
    LOCAL CONTENT LIST
@@ -1886,7 +1853,6 @@ app.get(
 
       }
 
-
       const type =
 
         req.params.type === 'dpp' ||
@@ -1894,9 +1860,7 @@ app.get(
         req.params.type === 'dpps'
 
           ? 'dpp'
-
           : 'test';
-
 
       const items =
         await Test.find({
@@ -1917,7 +1881,6 @@ app.get(
 
           });
 
-
       return res.json({
 
         success:
@@ -1927,11 +1890,9 @@ app.get(
 
       });
 
-
     } catch (e) {
 
       console.error(e);
-
 
       return res.status(500).json({
 
@@ -1947,7 +1908,6 @@ app.get(
 
   }
 );
-
 
 /* =====================================================
    CREATE LOCAL BATCH FROM SOURCE
@@ -1966,7 +1926,6 @@ app.post(
           req.params.sourceBatchId
         );
 
-
       let batch =
         await Batch.findOne({
 
@@ -1974,7 +1933,6 @@ app.post(
             srcId
 
         });
-
 
       if (!batch) {
 
@@ -1986,7 +1944,6 @@ app.post(
             'Source Batch'
 
           ).trim();
-
 
         batch =
           await Batch.create({
@@ -2023,7 +1980,6 @@ app.post(
 
       }
 
-
       return res.json({
 
         success:
@@ -2033,16 +1989,12 @@ app.post(
 
       });
 
-
     } catch (e) {
 
       console.error(
-
         'Local source batch error:',
         e
-
       );
-
 
       return res.status(400).json({
 
@@ -2058,7 +2010,6 @@ app.post(
 
   }
 );
-
 
 /* =====================================================
    UPLOAD TEST / DPP
@@ -2090,7 +2041,6 @@ app.post(
 
       }
 
-
       const type =
 
         req.params.type === 'dpp' ||
@@ -2098,9 +2048,7 @@ app.post(
         req.params.type === 'dpps'
 
           ? 'dpp'
-
           : 'test';
-
 
       const questions =
 
@@ -2109,9 +2057,7 @@ app.post(
         )
 
           ? req.body.questions
-
           : [];
-
 
       const title =
         String(
@@ -2121,7 +2067,6 @@ app.post(
           'Untitled'
 
         ).trim();
-
 
       const item =
         await Test.create({
@@ -2157,7 +2102,6 @@ app.post(
 
         });
 
-
       return res.json({
 
         success:
@@ -2167,14 +2111,12 @@ app.post(
 
       });
 
-
     } catch (e) {
 
       console.error(
         'Upload error:',
         e
       );
-
 
       return res.status(400).json({
 
@@ -2190,7 +2132,6 @@ app.post(
 
   }
 );
-
 
 /* =====================================================
    PUBLISH / UNPUBLISH
@@ -2210,7 +2151,6 @@ async function setPublished(
         req.params.id
       );
 
-
     if (!item) {
 
       return res.status(404).json({
@@ -2224,7 +2164,6 @@ async function setPublished(
       });
 
     }
-
 
     if (
       !canAccessBatch(
@@ -2245,16 +2184,13 @@ async function setPublished(
 
     }
 
-
     item.published =
       value;
 
     item.updatedAt =
       new Date();
 
-
     await item.save();
-
 
     return res.json({
 
@@ -2264,7 +2200,6 @@ async function setPublished(
       item
 
     });
-
 
   } catch {
 
@@ -2282,36 +2217,29 @@ async function setPublished(
 
 }
 
-
 app.post(
   '/api/admin/content/:id/publish',
   auth,
   (req, res) =>
-
     setPublished(
       req,
       res,
       true,
       'Publish failed'
     )
-
 );
-
 
 app.post(
   '/api/admin/content/:id/unpublish',
   auth,
   (req, res) =>
-
     setPublished(
       req,
       res,
       false,
       'Unpublish failed'
     )
-
 );
-
 
 /* =====================================================
    DELETE CONTENT
@@ -2329,7 +2257,6 @@ app.delete(
           req.params.id
         );
 
-
       if (!item) {
 
         return res.status(404).json({
@@ -2343,7 +2270,6 @@ app.delete(
         });
 
       }
-
 
       if (
         !canAccessBatch(
@@ -2364,13 +2290,9 @@ app.delete(
 
       }
 
-
       await Test.findByIdAndDelete(
-
         req.params.id
-
       );
-
 
       return res.json({
 
@@ -2378,7 +2300,6 @@ app.delete(
           true
 
       });
-
 
     } catch {
 
@@ -2397,7 +2318,6 @@ app.delete(
   }
 );
 
-
 /* =====================================================
    STATS
 ===================================================== */
@@ -2410,7 +2330,6 @@ app.get(
     try {
 
       let batchFilter = {};
-
 
       if (
         req.user.scope !== 'all'
@@ -2431,7 +2350,6 @@ app.get(
 
       }
 
-
       const batches =
 
         req.user.scope === 'all'
@@ -2451,7 +2369,6 @@ app.get(
 
             });
 
-
       const tests =
         await Test.countDocuments({
 
@@ -2461,7 +2378,6 @@ app.get(
             'test'
 
         });
-
 
       const dpps =
         await Test.countDocuments({
@@ -2473,7 +2389,6 @@ app.get(
 
         });
 
-
       const published =
         await Test.countDocuments({
 
@@ -2483,7 +2398,6 @@ app.get(
             true
 
         });
-
 
       return res.json({
 
@@ -2500,11 +2414,9 @@ app.get(
 
       });
 
-
     } catch (e) {
 
       console.error(e);
-
 
       return res.status(500).json({
 
@@ -2520,7 +2432,6 @@ app.get(
 
   }
 );
-
 
 /* =====================================================
    UPLOADER TOKENS
@@ -2538,22 +2449,16 @@ app.get(
         await UploaderToken.find()
 
           .populate(
-
             'batchIds',
-
             'name status category sourceBatchId'
-
           )
 
           .sort({
-
             createdAt:
               -1
-
           })
 
           .lean();
-
 
       const result =
         tokens.map(
@@ -2577,7 +2482,6 @@ app.get(
           })
         );
 
-
       return res.json({
 
         success:
@@ -2588,11 +2492,9 @@ app.get(
 
       });
 
-
     } catch (e) {
 
       console.error(e);
-
 
       return res.status(500).json({
 
@@ -2609,7 +2511,6 @@ app.get(
   }
 );
 
-
 /* =====================================================
    CREATE UPLOADER TOKEN
 ===================================================== */
@@ -2624,23 +2525,16 @@ app.post(
 
       const name =
         String(
-
-          req.body.name ||
-          ''
-
+          req.body.name || ''
         ).trim();
-
 
       const batchIds =
 
         Array.isArray(
           req.body.batchIds
         )
-
           ? req.body.batchIds
-
           : [];
-
 
       if (!name) {
 
@@ -2656,7 +2550,6 @@ app.post(
 
       }
 
-
       if (!batchIds.length) {
 
         return res.status(400).json({
@@ -2671,25 +2564,19 @@ app.post(
 
       }
 
-
       const batches =
         await Batch.find({
 
           _id: {
-
             $in:
               batchIds
-
           }
 
         });
 
-
       if (
-
         batches.length !==
         batchIds.length
-
       ) {
 
         return res.status(400).json({
@@ -2704,20 +2591,14 @@ app.post(
 
       }
 
-
       const unmapped =
         batches.filter(
-
           b =>
-
             !b.sourceBatchId ||
-
             !String(
               b.sourceBatchId
             ).trim()
-
         );
-
 
       if (unmapped.length) {
 
@@ -2733,16 +2614,13 @@ app.post(
 
       }
 
-
       const plainToken =
         generateUploaderToken();
-
 
       const tokenHash =
         hashToken(
           plainToken
         );
-
 
       const uploader =
         await UploaderToken.create({
@@ -2757,7 +2635,6 @@ app.post(
             true
 
         });
-
 
       return res.json({
 
@@ -2785,11 +2662,9 @@ app.post(
 
       });
 
-
     } catch (e) {
 
       console.error(e);
-
 
       return res.status(400).json({
 
@@ -2805,7 +2680,6 @@ app.post(
 
   }
 );
-
 
 /* =====================================================
    REVOKE UPLOADER TOKEN
@@ -2830,14 +2704,12 @@ app.delete(
 
       );
 
-
       return res.json({
 
         success:
           true
 
       });
-
 
     } catch {
 
@@ -2856,7 +2728,6 @@ app.delete(
   }
 );
 
-
 /* =====================================================
    DATABASE BOOT
 ===================================================== */
@@ -2873,34 +2744,26 @@ async function boot() {
 
   }
 
-
   await mongoose.connect(
     process.env.MONGO_URI
   );
-
 
   console.log(
     'MongoDB connected'
   );
 
-
   const username =
     process.env.ADMIN_USERNAME ||
     'admin';
-
 
   const password =
     process.env.ADMIN_PASSWORD ||
     'change-me';
 
-
   const exists =
     await User.findOne({
-
       username
-
     });
-
 
   if (!exists) {
 
@@ -2919,7 +2782,6 @@ async function boot() {
 
     });
 
-
     console.log(
       'Default admin user created'
     );
@@ -2927,7 +2789,6 @@ async function boot() {
   }
 
 }
-
 
 boot().catch(
   e => {
@@ -2940,15 +2801,12 @@ boot().catch(
   }
 );
 
-
 /* =====================================================
    SERVER
 ===================================================== */
 
 app.listen(
-
   PORT,
-
   () => {
 
     console.log(
@@ -2959,6 +2817,17 @@ app.listen(
       `PenPencil base: ${PENPENCIL_BASE}`
     );
 
-  }
+    console.log(
+      `PenPencil batches path: ${PENPENCIL_BATCHES_PATH}`
+    );
 
+    console.log(
+      `PenPencil tests path: ${PENPENCIL_TESTS_PATH}`
+    );
+
+    console.log(
+      `PenPencil DPP path: ${PENPENCIL_DPPS_PATH}`
+    );
+
+  }
 );
