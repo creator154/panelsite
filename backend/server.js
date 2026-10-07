@@ -13,30 +13,27 @@ const User = require('./models/User');
 const UploaderToken = require('./models/UploaderToken');
 
 const app = express();
+
 const PORT = process.env.PORT || 3000;
 
 app.use(cors({ origin: true }));
 
-app.use(
-  express.json({
-    limit: '20mb'
-  })
-);
+app.use(express.json({
+  limit: '20mb'
+}));
 
-app.use(
-  express.urlencoded({
-    extended: true,
-    limit: '20mb'
-  })
-);
-
-const JWT_SECRET =
-  process.env.JWT_SECRET || 'change-this-secret';
+app.use(express.urlencoded({
+  extended: true,
+  limit: '20mb'
+}));
 
 
 /* =====================================================
-   PENPENCIL SOURCE API
-   ===================================================== */
+   CONFIG
+===================================================== */
+
+const JWT_SECRET =
+  process.env.JWT_SECRET || 'change-this-secret';
 
 const PENPENCIL_API_TOKEN =
   process.env.PENPENCIL_API_TOKEN || '';
@@ -45,38 +42,87 @@ const PENPENCIL_BASE =
   'https://api.penpencil.xyz/v1';
 
 
+/* =====================================================
+   SOURCE BATCH ID SUPPORT
+===================================================== */
+
+/*
+  Existing Batch model me sourceBatchId nahi tha.
+  Yahan runtime par field add kar rahe hain,
+  isliye alag model file change karna zaroori nahi.
+*/
+
+if (!Batch.schema.path('sourceBatchId')) {
+  Batch.schema.add({
+    sourceBatchId: {
+      type: String,
+      index: true
+    }
+  });
+}
+
+
+/* =====================================================
+   PENPENCIL REQUEST
+===================================================== */
+
 async function penpencilRequest(path) {
 
   if (!PENPENCIL_API_TOKEN) {
     throw new Error(
-      'PENPENCIL_API_TOKEN is not configured'
+      'PENPENCIL_API_TOKEN is missing in Heroku Config Vars'
     );
   }
 
-  const response = await fetch(
-    PENPENCIL_BASE + path,
-    {
+  const url =
+    PENPENCIL_BASE + path;
+
+  console.log(
+    'PenPencil request:',
+    path
+  );
+
+  const response =
+    await fetch(url, {
       method: 'GET',
 
       headers: {
         Authorization:
           'Bearer ' + PENPENCIL_API_TOKEN,
 
-        Accept: 'application/json'
+        Accept:
+          'application/json'
       }
-    }
-  );
+    });
 
-  const data =
-    await response
-      .json()
-      .catch(() => ({}));
+  const text =
+    await response.text();
+
+  let data = {};
+
+  try {
+    data =
+      text
+        ? JSON.parse(text)
+        : {};
+  } catch {
+    data = {
+      raw: text
+    };
+  }
 
   if (!response.ok) {
 
+    console.error(
+      'PenPencil API error:',
+      response.status,
+      data
+    );
+
     throw new Error(
-      data.message ||
-      `PenPencil API error: ${response.status}`
+      data?.message ||
+      data?.error ||
+      `PenPencil API returned ${response.status}`
     );
   }
 
@@ -86,13 +132,13 @@ async function penpencilRequest(path) {
 
 /* =====================================================
    HELPERS
-   ===================================================== */
+===================================================== */
 
 function hashToken(token) {
 
   return crypto
     .createHash('sha256')
-    .update(token)
+    .update(String(token))
     .digest('hex');
 }
 
@@ -109,7 +155,8 @@ function sign(user) {
 
   return jwt.sign(
     {
-      sub: String(user._id),
+      sub:
+        String(user._id),
 
       username:
         user.username,
@@ -136,11 +183,11 @@ function sign(user) {
 
 function auth(req, res, next) {
 
-  const h =
+  const header =
     req.headers.authorization || '';
 
   const token =
-    h.replace(
+    header.replace(
       /^Bearer\s+/i,
       ''
     );
@@ -181,7 +228,6 @@ function masterOnly(req, res, next) {
     req.user &&
     req.user.scope === 'all'
   ) {
-
     return next();
   }
 
@@ -205,7 +251,6 @@ function canAccessBatch(
   if (
     req.user.scope === 'all'
   ) {
-
     return true;
   }
 
@@ -224,19 +269,83 @@ async function getAllowedBatchIds(req) {
   if (
     req.user.scope === 'all'
   ) {
-
     return null;
   }
 
   return (
     req.user.batchIds || []
-  ).map(id => id);
+  ).map(String);
+}
+
+
+/* =====================================================
+   SOURCE DATA NORMALIZERS
+===================================================== */
+
+function sourceArray(data) {
+
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  if (Array.isArray(data?.data)) {
+    return data.data;
+  }
+
+  if (Array.isArray(data?.data?.data)) {
+    return data.data.data;
+  }
+
+  if (Array.isArray(data?.results)) {
+    return data.results;
+  }
+
+  if (Array.isArray(data?.items)) {
+    return data.items;
+  }
+
+  if (Array.isArray(data?.batches)) {
+    return data.batches;
+  }
+
+  if (Array.isArray(data?.tests)) {
+    return data.tests;
+  }
+
+  if (Array.isArray(data?.dpps)) {
+    return data.dpps;
+  }
+
+  return [];
+}
+
+
+function sourceId(item) {
+
+  return String(
+    item?._id ||
+    item?.id ||
+    item?.batchId ||
+    item?.testId ||
+    ''
+  );
+}
+
+
+function sourceName(item) {
+
+  return String(
+    item?.name ||
+    item?.title ||
+    item?.batchName ||
+    'Untitled'
+  ).trim();
 }
 
 
 /* =====================================================
    HEALTH
-   ===================================================== */
+===================================================== */
 
 app.get(
   '/health',
@@ -244,7 +353,28 @@ app.get(
 
     res.json({
       ok: true,
-      service: 'zx-backend'
+      service:
+        'zx-backend'
+    });
+
+  }
+);
+
+
+/* =====================================================
+   ROOT
+===================================================== */
+
+app.get(
+  '/',
+  (req, res) => {
+
+    res.json({
+      ok: true,
+      service:
+        'zx-backend',
+      message:
+        'ZX backend is running'
     });
 
   }
@@ -253,7 +383,7 @@ app.get(
 
 /* =====================================================
    AUTH LOGIN
-   ===================================================== */
+===================================================== */
 
 app.post(
   '/api/auth/login',
@@ -268,11 +398,14 @@ app.post(
       } = req.body || {};
 
 
-      /* MASTER AUTH TOKEN */
+      /* -----------------------------------------------
+         MASTER AUTH TOKEN
+      ------------------------------------------------ */
 
       if (authToken) {
 
         if (
+          process.env.ADMIN_AUTH_TOKEN &&
           authToken ===
           process.env.ADMIN_AUTH_TOKEN
         ) {
@@ -309,11 +442,12 @@ app.post(
         }
 
 
-        /* SCOPED UPLOADER TOKEN */
+        /* ---------------------------------------------
+           SCOPED UPLOADER TOKEN
+        ---------------------------------------------- */
 
         const tokenHash =
           hashToken(authToken);
-
 
         const uploader =
           await UploaderToken
@@ -321,9 +455,7 @@ app.post(
               tokenHash,
               active: true
             })
-            .populate(
-              'batchIds'
-            );
+            .populate('batchIds');
 
 
         if (!uploader) {
@@ -375,7 +507,9 @@ app.post(
       }
 
 
-      /* USERNAME/PASSWORD LOGIN */
+      /* ---------------------------------------------
+         USERNAME / PASSWORD
+      ---------------------------------------------- */
 
       if (
         !username ||
@@ -434,7 +568,7 @@ app.post(
         });
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -455,7 +589,7 @@ app.post(
         e
       );
 
-      res.status(500).json({
+      return res.status(500).json({
 
         success: false,
 
@@ -469,8 +603,8 @@ app.post(
 
 
 /* =====================================================
-   PUBLIC APIs
-   ===================================================== */
+   PUBLIC BATCHES
+===================================================== */
 
 app.get(
   '/api/public/batches',
@@ -489,7 +623,7 @@ app.get(
           });
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -499,7 +633,9 @@ app.get(
 
     } catch (e) {
 
-      res.status(500).json({
+      console.error(e);
+
+      return res.status(500).json({
 
         success: false,
 
@@ -511,6 +647,10 @@ app.get(
   }
 );
 
+
+/* =====================================================
+   PUBLIC CONTENT
+===================================================== */
 
 app.get(
   '/api/public/batches/:id/:type',
@@ -549,7 +689,7 @@ app.get(
           });
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -559,7 +699,9 @@ app.get(
 
     } catch (e) {
 
-      res.status(500).json({
+      console.error(e);
+
+      return res.status(500).json({
 
         success: false,
 
@@ -574,58 +716,44 @@ app.get(
 
 /* =====================================================
    CURRENT USER
-   ===================================================== */
+===================================================== */
 
 app.get(
   '/api/admin/me',
   auth,
   async (req, res) => {
 
-    try {
+    return res.json({
 
-      res.json({
+      success: true,
 
-        success: true,
+      user: {
 
-        user: {
+        sub:
+          req.user.sub,
 
-          sub:
-            req.user.sub,
+        username:
+          req.user.username,
 
-          username:
-            req.user.username,
+        role:
+          req.user.role,
 
-          role:
-            req.user.role,
+        scope:
+          req.user.scope || 'all',
 
-          scope:
-            req.user.scope || 'all',
+        batchIds:
+          req.user.batchIds || []
 
-          batchIds:
-            req.user.batchIds || []
+      }
 
-        }
-
-      });
-
-    } catch (e) {
-
-      res.status(500).json({
-
-        success: false,
-
-        message:
-          'Failed to load user'
-
-      });
-    }
+    });
   }
 );
 
 
 /* =====================================================
-   PENPENCIL SOURCE BATCHES
-   ===================================================== */
+   SOURCE BATCHES
+===================================================== */
 
 app.get(
   '/api/admin/source/batches',
@@ -640,11 +768,23 @@ app.get(
         );
 
 
-      res.json({
+      const batches =
+        sourceArray(data);
+
+
+      console.log(
+        'Source batches:',
+        batches.length
+      );
+
+
+      return res.json({
 
         success: true,
 
-        data
+        data,
+
+        batches
 
       });
 
@@ -656,12 +796,15 @@ app.get(
       );
 
 
-      res.status(502).json({
+      return res.status(502).json({
 
         success: false,
 
         message:
-          e.message
+          e.message,
+
+        batches:
+          []
 
       });
     }
@@ -670,8 +813,8 @@ app.get(
 
 
 /* =====================================================
-   PENPENCIL TESTS
-   ===================================================== */
+   SOURCE TESTS
+===================================================== */
 
 app.get(
   '/api/admin/source/batches/:batchId/tests',
@@ -680,21 +823,29 @@ app.get(
 
     try {
 
-      const data =
-        await penpencilRequest(
-
-          `/batches/${encodeURIComponent(
-            req.params.batchId
-          )}/tests`
-
+      const id =
+        encodeURIComponent(
+          req.params.batchId
         );
 
 
-      res.json({
+      const data =
+        await penpencilRequest(
+          `/batches/${id}/tests`
+        );
+
+
+      const items =
+        sourceArray(data);
+
+
+      return res.json({
 
         success: true,
 
-        data
+        data,
+
+        items
 
       });
 
@@ -706,12 +857,15 @@ app.get(
       );
 
 
-      res.status(502).json({
+      return res.status(502).json({
 
         success: false,
 
         message:
-          e.message
+          e.message,
+
+        items:
+          []
 
       });
     }
@@ -720,8 +874,8 @@ app.get(
 
 
 /* =====================================================
-   PENPENCIL DPPs
-   ===================================================== */
+   SOURCE DPPs
+===================================================== */
 
 app.get(
   '/api/admin/source/batches/:batchId/dpps',
@@ -730,21 +884,29 @@ app.get(
 
     try {
 
-      const data =
-        await penpencilRequest(
-
-          `/batches/${encodeURIComponent(
-            req.params.batchId
-          )}/dpps`
-
+      const id =
+        encodeURIComponent(
+          req.params.batchId
         );
 
 
-      res.json({
+      const data =
+        await penpencilRequest(
+          `/batches/${id}/dpps`
+        );
+
+
+      const items =
+        sourceArray(data);
+
+
+      return res.json({
 
         success: true,
 
-        data
+        data,
+
+        items
 
       });
 
@@ -756,12 +918,15 @@ app.get(
       );
 
 
-      res.status(502).json({
+      return res.status(502).json({
 
         success: false,
 
         message:
-          e.message
+          e.message,
+
+        items:
+          []
 
       });
     }
@@ -770,8 +935,8 @@ app.get(
 
 
 /* =====================================================
-   PENPENCIL TEST DETAILS
-   ===================================================== */
+   SOURCE TEST DETAILS
+===================================================== */
 
 app.get(
   '/api/admin/source/tests/:testId',
@@ -780,17 +945,19 @@ app.get(
 
     try {
 
-      const data =
-        await penpencilRequest(
-
-          `/tests/${encodeURIComponent(
-            req.params.testId
-          )}`
-
+      const id =
+        encodeURIComponent(
+          req.params.testId
         );
 
 
-      res.json({
+      const data =
+        await penpencilRequest(
+          `/tests/${id}`
+        );
+
+
+      return res.json({
 
         success: true,
 
@@ -806,7 +973,7 @@ app.get(
       );
 
 
-      res.status(502).json({
+      return res.status(502).json({
 
         success: false,
 
@@ -821,7 +988,7 @@ app.get(
 
 /* =====================================================
    ADMIN BATCHES
-   ===================================================== */
+===================================================== */
 
 app.get(
   '/api/admin/batches',
@@ -841,7 +1008,8 @@ app.get(
           await Batch
             .find()
             .sort({
-              createdAt: -1
+              createdAt:
+                -1
             });
 
       } else {
@@ -859,12 +1027,13 @@ app.get(
 
             })
             .sort({
-              createdAt: -1
+              createdAt:
+                -1
             });
       }
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -876,8 +1045,7 @@ app.get(
 
       console.error(e);
 
-
-      res.status(500).json({
+      return res.status(500).json({
 
         success: false,
 
@@ -892,7 +1060,7 @@ app.get(
 
 /* =====================================================
    CREATE BATCH
-   ===================================================== */
+===================================================== */
 
 app.post(
   '/api/admin/batches',
@@ -902,42 +1070,55 @@ app.post(
 
     try {
 
-      const b =
+      const batch =
         await Batch.create({
 
           name:
             req.body.name,
 
           category:
-            req.body.category,
+            req.body.category ||
+            'Other Batch Tests',
 
           subgroup:
-            req.body.subgroup,
+            req.body.subgroup ||
+            '',
 
           exam:
-            req.body.exam,
+            req.body.exam ||
+            '',
 
           language:
-            req.body.language,
+            req.body.language ||
+            'Hindi',
 
           status:
-            req.body.status
+            req.body.status ||
+            'Paid',
+
+          active:
+            req.body.active !== false,
+
+          sourceBatchId:
+            req.body.sourceBatchId ||
+            undefined
 
         });
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
-        batch:
-          b
+        batch
 
       });
 
     } catch (e) {
 
-      res.status(400).json({
+      console.error(e);
+
+      return res.status(400).json({
 
         success: false,
 
@@ -952,7 +1133,7 @@ app.post(
 
 /* =====================================================
    UPDATE BATCH
-   ===================================================== */
+===================================================== */
 
 app.put(
   '/api/admin/batches/:id',
@@ -962,13 +1143,14 @@ app.put(
 
     try {
 
-      const b =
+      const batch =
         await Batch.findByIdAndUpdate(
 
           req.params.id,
 
           {
             ...req.body,
+
             updatedAt:
               new Date()
           },
@@ -976,22 +1158,33 @@ app.put(
           {
             new: true
           }
-
         );
 
 
-      res.json({
+      if (!batch) {
+
+        return res.status(404).json({
+
+          success: false,
+
+          message:
+            'Batch not found'
+
+        });
+      }
+
+
+      return res.json({
 
         success: true,
 
-        batch:
-          b
+        batch
 
       });
 
     } catch (e) {
 
-      res.status(400).json({
+      return res.status(400).json({
 
         success: false,
 
@@ -1006,7 +1199,7 @@ app.put(
 
 /* =====================================================
    DELETE BATCH
-   ===================================================== */
+===================================================== */
 
 app.delete(
   '/api/admin/batches/:id',
@@ -1027,13 +1220,13 @@ app.delete(
       );
 
 
-      res.json({
+      return res.json({
         success: true
       });
 
     } catch (e) {
 
-      res.status(400).json({
+      return res.status(400).json({
 
         success: false,
 
@@ -1048,7 +1241,7 @@ app.delete(
 
 /* =====================================================
    CONTENT LIST
-   ===================================================== */
+===================================================== */
 
 app.get(
   '/api/admin/batches/:id/content/:type',
@@ -1103,7 +1296,7 @@ app.get(
           });
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -1113,7 +1306,9 @@ app.get(
 
     } catch (e) {
 
-      res.status(500).json({
+      console.error(e);
+
+      return res.status(500).json({
 
         success: false,
 
@@ -1127,8 +1322,105 @@ app.get(
 
 
 /* =====================================================
+   GET / CREATE LOCAL BATCH FROM SOURCE
+===================================================== */
+
+app.post(
+  '/api/admin/source/batches/:sourceBatchId/local',
+  auth,
+  async (req, res) => {
+
+    try {
+
+      const sourceId =
+        String(
+          req.params.sourceBatchId
+        );
+
+
+      let batch =
+        await Batch.findOne({
+          sourceBatchId:
+            sourceId
+        });
+
+
+      if (!batch) {
+
+        const name =
+          String(
+            req.body.name ||
+            'Source Batch'
+          ).trim();
+
+
+        batch =
+          await Batch.create({
+
+            name,
+
+            category:
+              req.body.category ||
+              'Other Batch Tests',
+
+            subgroup:
+              req.body.subgroup ||
+              '',
+
+            exam:
+              req.body.exam ||
+              '',
+
+            language:
+              req.body.language ||
+              'Hindi',
+
+            status:
+              req.body.status ||
+              'Paid',
+
+            active:
+              true,
+
+            sourceBatchId:
+              sourceId
+
+          });
+
+      }
+
+
+      return res.json({
+
+        success: true,
+
+        batch
+
+      });
+
+    } catch (e) {
+
+      console.error(
+        'Local source batch error:',
+        e
+      );
+
+      return res.status(400).json({
+
+        success: false,
+
+        message:
+          e.message
+
+      });
+    }
+  }
+);
+
+
+/* =====================================================
    UPLOAD TEST / DPP
-   ===================================================== */
+===================================================== */
 
 app.post(
   '/api/admin/batches/:id/content/:type',
@@ -1170,6 +1462,13 @@ app.post(
           : [];
 
 
+      const title =
+        String(
+          req.body.title ||
+          'Untitled'
+        ).trim();
+
+
       const item =
         await Test.create({
 
@@ -1178,11 +1477,11 @@ app.post(
 
           type,
 
-          title:
-            req.body.title,
+          title,
 
           instructions:
-            req.body.instructions || '',
+            req.body.instructions ||
+            '',
 
           startTime:
             req.body.startTime ||
@@ -1197,12 +1496,15 @@ app.post(
             req.body.published !== false,
 
           uploadedAt:
+            new Date(),
+
+          updatedAt:
             new Date()
 
         });
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -1212,10 +1514,12 @@ app.post(
 
     } catch (e) {
 
-      console.error(e);
+      console.error(
+        'Upload error:',
+        e
+      );
 
-
-      res.status(400).json({
+      return res.status(400).json({
 
         success: false,
 
@@ -1230,7 +1534,7 @@ app.post(
 
 /* =====================================================
    PUBLISH
-   ===================================================== */
+===================================================== */
 
 app.post(
   '/api/admin/content/:id/publish',
@@ -1286,7 +1590,7 @@ app.post(
       await item.save();
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -1296,7 +1600,7 @@ app.post(
 
     } catch (e) {
 
-      res.status(400).json({
+      return res.status(400).json({
 
         success: false,
 
@@ -1311,7 +1615,7 @@ app.post(
 
 /* =====================================================
    UNPUBLISH
-   ===================================================== */
+===================================================== */
 
 app.post(
   '/api/admin/content/:id/unpublish',
@@ -1367,7 +1671,7 @@ app.post(
       await item.save();
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -1377,7 +1681,7 @@ app.post(
 
     } catch (e) {
 
-      res.status(400).json({
+      return res.status(400).json({
 
         success: false,
 
@@ -1392,7 +1696,7 @@ app.post(
 
 /* =====================================================
    DELETE CONTENT
-   ===================================================== */
+===================================================== */
 
 app.delete(
   '/api/admin/content/:id',
@@ -1443,13 +1747,13 @@ app.delete(
       );
 
 
-      res.json({
+      return res.json({
         success: true
       });
 
     } catch (e) {
 
-      res.status(400).json({
+      return res.status(400).json({
 
         success: false,
 
@@ -1464,7 +1768,7 @@ app.delete(
 
 /* =====================================================
    STATS
-   ===================================================== */
+===================================================== */
 
 app.get(
   '/api/admin/stats',
@@ -1549,7 +1853,7 @@ app.get(
         });
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -1567,10 +1871,12 @@ app.get(
 
       console.error(e);
 
+      return res.status(500).json({
 
-      res.status(500).json({
+        success: false,
 
-        success: false
+        message:
+          'Failed to load stats'
 
       });
     }
@@ -1580,7 +1886,7 @@ app.get(
 
 /* =====================================================
    UPLOADER TOKENS
-   ===================================================== */
+===================================================== */
 
 app.get(
   '/api/admin/uploader-tokens',
@@ -1595,7 +1901,7 @@ app.get(
           .find()
           .populate(
             'batchIds',
-            'name status category'
+            'name status category sourceBatchId'
           )
           .sort({
             createdAt:
@@ -1627,7 +1933,7 @@ app.get(
         );
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -1640,8 +1946,7 @@ app.get(
 
       console.error(e);
 
-
-      res.status(500).json({
+      return res.status(500).json({
 
         success: false,
 
@@ -1656,7 +1961,7 @@ app.get(
 
 /* =====================================================
    CREATE UPLOADER TOKEN
-   ===================================================== */
+===================================================== */
 
 app.post(
   '/api/admin/uploader-tokens',
@@ -1758,7 +2063,7 @@ app.post(
         });
 
 
-      res.json({
+      return res.json({
 
         success: true,
 
@@ -1787,8 +2092,7 @@ app.post(
 
       console.error(e);
 
-
-      res.status(400).json({
+      return res.status(400).json({
 
         success: false,
 
@@ -1803,7 +2107,7 @@ app.post(
 
 /* =====================================================
    REVOKE UPLOADER TOKEN
-   ===================================================== */
+===================================================== */
 
 app.delete(
   '/api/admin/uploader-tokens/:id',
@@ -1826,13 +2130,13 @@ app.delete(
         );
 
 
-      res.json({
+      return res.json({
         success: true
       });
 
     } catch (e) {
 
-      res.status(400).json({
+      return res.status(400).json({
 
         success: false,
 
@@ -1846,30 +2150,12 @@ app.delete(
 
 
 /* =====================================================
-   SERVER
-   ===================================================== */
-
-app.listen(
-  PORT,
-  () => {
-
-    console.log(
-      `ZX backend running on ${PORT}`
-    );
-
-  }
-);
-
-
-/* =====================================================
    DATABASE BOOT
-   ===================================================== */
+===================================================== */
 
 async function boot() {
 
-  if (
-    !process.env.MONGO_URI
-  ) {
+  if (!process.env.MONGO_URI) {
 
     console.warn(
       'MONGO_URI is required for persistent data.'
@@ -1922,14 +2208,36 @@ async function boot() {
 
     });
 
+    console.log(
+      'Default admin user created'
+    );
   }
 }
 
 
 boot().catch(
-  e =>
+  e => {
+
     console.error(
       'DB boot error:',
       e.message
-    )
+    );
+
+  }
+);
+
+
+/* =====================================================
+   SERVER
+===================================================== */
+
+app.listen(
+  PORT,
+  () => {
+
+    console.log(
+      `ZX backend running on ${PORT}`
+    );
+
+  }
 );
