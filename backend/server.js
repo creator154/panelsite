@@ -20,7 +20,6 @@ app.use(cors({ origin: true }));
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-
 /* =====================================================
    CONFIG
 ===================================================== */
@@ -28,6 +27,21 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret';
 const PENPENCIL_API_TOKEN = process.env.PENPENCIL_API_TOKEN || '';
 const PENPENCIL_BASE = 'https://api.penpencil.xyz/v1';
+
+/*
+  IMPORTANT:
+  Batch model me sourceBatchId field add kar rahe hain.
+  Isse existing Batch.js ko turant change kiye bina
+  server source mapping store kar sakega.
+*/
+if (!Batch.schema.path('sourceBatchId')) {
+  Batch.schema.add({
+    sourceBatchId: {
+      type: String,
+      index: true
+    }
+  });
+}
 
 
 /* =====================================================
@@ -37,7 +51,9 @@ const PENPENCIL_BASE = 'https://api.penpencil.xyz/v1';
 async function penpencilRequest(path) {
 
   if (!PENPENCIL_API_TOKEN) {
-    throw new Error('PENPENCIL_API_TOKEN is missing in Heroku Config Vars');
+    throw new Error(
+      'PENPENCIL_API_TOKEN is missing in Heroku Config Vars'
+    );
   }
 
   const url = PENPENCIL_BASE + path;
@@ -63,7 +79,11 @@ async function penpencilRequest(path) {
   }
 
   if (!response.ok) {
-    console.error('PenPencil API error:', response.status, data);
+    console.error(
+      'PenPencil API error:',
+      response.status,
+      data
+    );
 
     throw new Error(
       data?.message ||
@@ -81,7 +101,10 @@ async function penpencilRequest(path) {
 ===================================================== */
 
 function hashToken(token) {
-  return crypto.createHash('sha256').update(String(token)).digest('hex');
+  return crypto
+    .createHash('sha256')
+    .update(String(token))
+    .digest('hex');
 }
 
 
@@ -91,6 +114,7 @@ function generateUploaderToken() {
 
 
 function sign(user) {
+
   return jwt.sign(
     {
       sub: String(user._id),
@@ -100,7 +124,9 @@ function sign(user) {
       batchIds: (user.batchIds || []).map(String)
     },
     JWT_SECRET,
-    { expiresIn: '7d' }
+    {
+      expiresIn: '7d'
+    }
   );
 }
 
@@ -118,9 +144,13 @@ function auth(req, res, next) {
   }
 
   try {
+
     req.user = jwt.verify(token, JWT_SECRET);
+
     next();
+
   } catch (e) {
+
     return res.status(401).json({
       success: false,
       message: 'Invalid or expired token'
@@ -144,19 +174,103 @@ function masterOnly(req, res, next) {
 
 function canAccessBatch(req, batchId) {
 
-  if (!req.user) return false;
+  if (!req.user) {
+    return false;
+  }
 
-  if (req.user.scope === 'all') return true;
+  if (req.user.scope === 'all') {
+    return true;
+  }
 
-  return (req.user.batchIds || []).map(String).includes(String(batchId));
+  return (req.user.batchIds || [])
+    .map(String)
+    .includes(String(batchId));
 }
 
 
 async function getAllowedBatchIds(req) {
 
-  if (req.user.scope === 'all') return null;
+  if (req.user.scope === 'all') {
+    return null;
+  }
 
   return (req.user.batchIds || []).map(String);
+}
+
+
+/*
+  Check whether a scoped uploader has access to a SOURCE batch.
+
+  Mapping:
+  UploaderToken.batchIds
+        ↓
+  Local Batch._id
+        ↓
+  Local Batch.sourceBatchId
+        ↓
+  PenPencil source batch ID
+*/
+async function canAccessSourceBatch(req, sourceBatchId) {
+
+  if (!req.user) {
+    return false;
+  }
+
+  if (req.user.scope === 'all') {
+    return true;
+  }
+
+  const allowedLocalIds =
+    (req.user.batchIds || []).map(String);
+
+  if (!allowedLocalIds.length) {
+    return false;
+  }
+
+  const batch = await Batch.findOne({
+    _id: {
+      $in: allowedLocalIds
+    },
+    sourceBatchId: String(sourceBatchId),
+    active: true
+  }).lean();
+
+  return !!batch;
+}
+
+
+/*
+  Get source batch IDs available to current uploader.
+*/
+async function getAllowedSourceBatchIds(req) {
+
+  if (req.user.scope === 'all') {
+    return null;
+  }
+
+  const allowedLocalIds =
+    (req.user.batchIds || []).map(String);
+
+  if (!allowedLocalIds.length) {
+    return [];
+  }
+
+  const batches = await Batch.find({
+    _id: {
+      $in: allowedLocalIds
+    },
+    active: true,
+    sourceBatchId: {
+      $exists: true,
+      $ne: ''
+    }
+  })
+    .select('_id sourceBatchId')
+    .lean();
+
+  return batches
+    .map(b => String(b.sourceBatchId))
+    .filter(Boolean);
 }
 
 
@@ -167,18 +281,65 @@ async function getAllowedBatchIds(req) {
 function sourceArray(data) {
 
   if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.data)) return data.data;
-  if (Array.isArray(data?.data?.data)) return data.data.data;
-  if (Array.isArray(data?.data?.batches)) return data.data.batches;
-  if (Array.isArray(data?.data?.items)) return data.data.items;
-  if (Array.isArray(data?.data?.results)) return data.data.results;
-  if (Array.isArray(data?.results)) return data.results;
-  if (Array.isArray(data?.items)) return data.items;
-  if (Array.isArray(data?.batches)) return data.batches;
-  if (Array.isArray(data?.tests)) return data.tests;
-  if (Array.isArray(data?.dpps)) return data.dpps;
+
+  if (Array.isArray(data?.data)) {
+    return data.data;
+  }
+
+  if (Array.isArray(data?.data?.data)) {
+    return data.data.data;
+  }
+
+  if (Array.isArray(data?.data?.batches)) {
+    return data.data.batches;
+  }
+
+  if (Array.isArray(data?.data?.items)) {
+    return data.data.items;
+  }
+
+  if (Array.isArray(data?.data?.results)) {
+    return data.data.results;
+  }
+
+  if (Array.isArray(data?.results)) {
+    return data.results;
+  }
+
+  if (Array.isArray(data?.items)) {
+    return data.items;
+  }
+
+  if (Array.isArray(data?.batches)) {
+    return data.batches;
+  }
+
+  if (Array.isArray(data?.tests)) {
+    return data.tests;
+  }
+
+  if (Array.isArray(data?.dpps)) {
+    return data.dpps;
+  }
 
   return [];
+}
+
+
+/*
+  Try to get source batch ID from a source batch object.
+*/
+function getSourceBatchId(batch) {
+
+  if (!batch) return '';
+
+  return String(
+    batch._id ||
+    batch.id ||
+    batch.batchId ||
+    batch.batch_id ||
+    ''
+  );
 }
 
 
@@ -187,10 +348,16 @@ function sourceArray(data) {
 ===================================================== */
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true, service: 'zx-backend' });
+
+  res.json({
+    ok: true,
+    service: 'zx-backend'
+  });
 });
 
+
 app.get('/', (req, res) => {
+
   res.json({
     ok: true,
     service: 'zx-backend',
@@ -207,7 +374,12 @@ app.post('/api/auth/login', async (req, res) => {
 
   try {
 
-    const { username, password, authToken } = req.body || {};
+    const {
+      username,
+      password,
+      authToken
+    } = req.body || {};
+
 
     /* ---------- MASTER AUTH TOKEN ---------- */
 
@@ -234,57 +406,84 @@ app.post('/api/auth/login', async (req, res) => {
         });
       }
 
+
       /* ---------- SCOPED UPLOADER TOKEN ---------- */
 
       const tokenHash = hashToken(authToken);
 
       const uploader = await UploaderToken
-        .findOne({ tokenHash, active: true })
+        .findOne({
+          tokenHash,
+          active: true
+        })
         .populate('batchIds');
 
+
       if (!uploader) {
+
         return res.status(401).json({
           success: false,
           message: 'Invalid or inactive auth token'
         });
       }
 
+
+      const assignedBatchIds =
+        (uploader.batchIds || [])
+          .map(b => b?._id)
+          .filter(Boolean)
+          .map(String);
+
+
       const token = sign({
         _id: uploader._id,
         username: uploader.name,
         role: 'Batch Uploader',
         scope: 'batches',
-        batchIds: uploader.batchIds.map((b) => b._id)
+        batchIds: assignedBatchIds
       });
+
 
       return res.json({
         success: true,
         token,
         role: 'Batch Uploader',
-        scope: 'batches'
+        scope: 'batches',
+        batchIds: assignedBatchIds
       });
     }
+
 
     /* ---------- USERNAME / PASSWORD ---------- */
 
     if (!username || !password) {
+
       return res.status(400).json({
         success: false,
         message: 'Username and password required'
       });
     }
 
-    const user = await User.findOne({ username });
+
+    const user = await User.findOne({
+      username
+    });
+
 
     if (
       !user ||
-      !(await bcrypt.compare(password, user.passwordHash))
+      !(await bcrypt.compare(
+        password,
+        user.passwordHash
+      ))
     ) {
+
       return res.status(401).json({
         success: false,
         message: 'Invalid login'
       });
     }
+
 
     const token = sign({
       _id: user._id,
@@ -293,6 +492,7 @@ app.post('/api/auth/login', async (req, res) => {
       scope: 'all',
       batchIds: []
     });
+
 
     return res.json({
       success: true,
@@ -322,10 +522,18 @@ app.get('/api/public/batches', async (req, res) => {
   try {
 
     const batches = await Batch
-      .find({ active: true })
-      .sort({ category: 1, name: 1 });
+      .find({
+        active: true
+      })
+      .sort({
+        category: 1,
+        name: 1
+      });
 
-    return res.json({ success: true, batches });
+    return res.json({
+      success: true,
+      batches
+    });
 
   } catch (e) {
 
@@ -343,79 +551,148 @@ app.get('/api/public/batches', async (req, res) => {
    PUBLIC CONTENT
 ===================================================== */
 
-app.get('/api/public/batches/:id/:type', async (req, res) => {
+app.get(
+  '/api/public/batches/:id/:type',
+  async (req, res) => {
 
-  try {
+    try {
 
-    const type =
-      req.params.type === 'dpp' || req.params.type === 'dpps'
-        ? 'dpp'
-        : 'test';
+      const type =
+        req.params.type === 'dpp' ||
+        req.params.type === 'dpps'
+          ? 'dpp'
+          : 'test';
 
-    const items = await Test
-      .find({
-        batchId: req.params.id,
-        type,
-        published: true
-      })
-      .sort({ startTime: -1, createdAt: -1 });
 
-    return res.json({ success: true, items });
+      const items = await Test
+        .find({
+          batchId: req.params.id,
+          type,
+          published: true
+        })
+        .sort({
+          startTime: -1,
+          createdAt: -1
+        });
 
-  } catch (e) {
 
-    console.error(e);
+      return res.json({
+        success: true,
+        items
+      });
 
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to load content'
-    });
+    } catch (e) {
+
+      console.error(e);
+
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to load content'
+      });
+    }
   }
-});
+);
 
 
 /* =====================================================
    CURRENT USER
 ===================================================== */
 
-app.get('/api/admin/me', auth, async (req, res) => {
+app.get(
+  '/api/admin/me',
+  auth,
+  async (req, res) => {
 
-  return res.json({
-    success: true,
-    user: {
-      sub: req.user.sub,
-      username: req.user.username,
-      role: req.user.role,
-      scope: req.user.scope || 'all',
-      batchIds: req.user.batchIds || []
-    }
-  });
-});
+    return res.json({
+      success: true,
+      user: {
+        sub: req.user.sub,
+        username: req.user.username,
+        role: req.user.role,
+        scope: req.user.scope || 'all',
+        batchIds: req.user.batchIds || []
+      }
+    });
+  }
+);
 
 
 /* =====================================================
-   SOURCE BATCHES (sirf master)
+   SOURCE BATCHES
+   MASTER = ALL
+   SCOPED TOKEN = ONLY ASSIGNED
 ===================================================== */
 
 app.get(
   '/api/admin/source/batches',
   auth,
-  masterOnly,
   async (req, res) => {
 
     try {
 
-      const data = await penpencilRequest('/users/batches?page=1&limit=50');
+      const data =
+        await penpencilRequest(
+          '/users/batches?page=1&limit=50'
+        );
 
-      const batches = sourceArray(data);
 
-      console.log('Source batches:', batches.length);
+      let batches = sourceArray(data);
 
-      return res.json({ success: true, data, batches });
+
+      /*
+        MASTER:
+        show all source batches.
+
+        SCOPED:
+        only source batches whose sourceBatchId
+        is mapped to one of uploader's local batches.
+      */
+
+      if (req.user.scope !== 'all') {
+
+        const allowedSourceIds =
+          await getAllowedSourceBatchIds(req);
+
+
+        const allowedSet =
+          new Set(
+            allowedSourceIds.map(String)
+          );
+
+
+        batches = batches.filter(batch => {
+
+          const sourceId =
+            getSourceBatchId(batch);
+
+          return (
+            sourceId &&
+            allowedSet.has(sourceId)
+          );
+        });
+      }
+
+
+      console.log(
+        'Source batches returned:',
+        batches.length,
+        'scope:',
+        req.user.scope
+      );
+
+
+      return res.json({
+        success: true,
+        data,
+        batches
+      });
 
     } catch (e) {
 
-      console.error('PenPencil batches error:', e.message);
+      console.error(
+        'PenPencil batches error:',
+        e.message
+      );
 
       return res.status(502).json({
         success: false,
@@ -438,17 +715,60 @@ app.get(
 
     try {
 
-      const id = encodeURIComponent(req.params.batchId);
+      const sourceBatchId =
+        String(req.params.batchId);
 
-      const data = await penpencilRequest(`/batches/${id}/tests`);
 
-      const items = sourceArray(data);
+      /*
+        VERY IMPORTANT:
+        Scoped uploader can only open
+        assigned source batch.
+      */
 
-      return res.json({ success: true, data, items });
+      const allowed =
+        await canAccessSourceBatch(
+          req,
+          sourceBatchId
+        );
+
+
+      if (!allowed) {
+
+        return res.status(403).json({
+          success: false,
+          message:
+            'You do not have access to this source batch',
+          items: []
+        });
+      }
+
+
+      const id =
+        encodeURIComponent(sourceBatchId);
+
+
+      const data =
+        await penpencilRequest(
+          `/batches/${id}/tests`
+        );
+
+
+      const items =
+        sourceArray(data);
+
+
+      return res.json({
+        success: true,
+        data,
+        items
+      });
 
     } catch (e) {
 
-      console.error('PenPencil tests error:', e.message);
+      console.error(
+        'PenPencil tests error:',
+        e.message
+      );
 
       return res.status(502).json({
         success: false,
@@ -471,17 +791,54 @@ app.get(
 
     try {
 
-      const id = encodeURIComponent(req.params.batchId);
+      const sourceBatchId =
+        String(req.params.batchId);
 
-      const data = await penpencilRequest(`/batches/${id}/dpps`);
 
-      const items = sourceArray(data);
+      const allowed =
+        await canAccessSourceBatch(
+          req,
+          sourceBatchId
+        );
 
-      return res.json({ success: true, data, items });
+
+      if (!allowed) {
+
+        return res.status(403).json({
+          success: false,
+          message:
+            'You do not have access to this source batch',
+          items: []
+        });
+      }
+
+
+      const id =
+        encodeURIComponent(sourceBatchId);
+
+
+      const data =
+        await penpencilRequest(
+          `/batches/${id}/dpps`
+        );
+
+
+      const items =
+        sourceArray(data);
+
+
+      return res.json({
+        success: true,
+        data,
+        items
+      });
 
     } catch (e) {
 
-      console.error('PenPencil DPP error:', e.message);
+      console.error(
+        'PenPencil DPP error:',
+        e.message
+      );
 
       return res.status(502).json({
         success: false,
@@ -504,15 +861,56 @@ app.get(
 
     try {
 
-      const id = encodeURIComponent(req.params.testId);
+      /*
+        If frontend sends ?batchId=SOURCE_ID,
+        verify it before fetching details.
+      */
 
-      const data = await penpencilRequest(`/tests/${id}`);
+      const requestedBatchId =
+        req.query.batchId
+          ? String(req.query.batchId)
+          : '';
 
-      return res.json({ success: true, data });
+
+      if (
+        requestedBatchId &&
+        !(await canAccessSourceBatch(
+          req,
+          requestedBatchId
+        ))
+      ) {
+
+        return res.status(403).json({
+          success: false,
+          message:
+            'You do not have access to this source batch'
+        });
+      }
+
+
+      const id =
+        encodeURIComponent(
+          req.params.testId
+        );
+
+
+      const data =
+        await penpencilRequest(
+          `/tests/${id}`
+        );
+
+
+      return res.json({
+        success: true,
+        data
+      });
 
     } catch (e) {
 
-      console.error('PenPencil test details error:', e.message);
+      console.error(
+        'PenPencil test details error:',
+        e.message
+      );
 
       return res.status(502).json({
         success: false,
@@ -527,162 +925,267 @@ app.get(
    ADMIN BATCHES
 ===================================================== */
 
-app.get('/api/admin/batches', auth, async (req, res) => {
+app.get(
+  '/api/admin/batches',
+  auth,
+  async (req, res) => {
 
-  try {
+    try {
 
-    let batches;
+      let batches;
 
-    if (req.user.scope === 'all') {
 
-      batches = await Batch.find().sort({ createdAt: -1 });
+      if (req.user.scope === 'all') {
 
-    } else {
+        batches =
+          await Batch
+            .find()
+            .sort({
+              createdAt: -1
+            });
 
-      batches = await Batch
-        .find({ _id: { $in: await getAllowedBatchIds(req) } })
-        .sort({ createdAt: -1 });
+      } else {
+
+        batches =
+          await Batch
+            .find({
+              _id: {
+                $in:
+                  await getAllowedBatchIds(req)
+              }
+            })
+            .sort({
+              createdAt: -1
+            });
+      }
+
+
+      return res.json({
+        success: true,
+        batches
+      });
+
+    } catch (e) {
+
+      console.error(e);
+
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to load batches'
+      });
     }
-
-    return res.json({ success: true, batches });
-
-  } catch (e) {
-
-    console.error(e);
-
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to load batches'
-    });
   }
-});
+);
 
 
 /* =====================================================
    CREATE BATCH
 ===================================================== */
 
-app.post('/api/admin/batches', auth, masterOnly, async (req, res) => {
+app.post(
+  '/api/admin/batches',
+  auth,
+  masterOnly,
+  async (req, res) => {
 
-  try {
+    try {
 
-    const batch = await Batch.create({
-      name: req.body.name,
-      category: req.body.category || 'Other Batch Tests',
-      subgroup: req.body.subgroup || '',
-      exam: req.body.exam || '',
-      language: req.body.language || 'Hindi',
-      status: req.body.status || 'Paid',
-      active: req.body.active !== false,
-      sourceBatchId: req.body.sourceBatchId || undefined
-    });
+      const batch =
+        await Batch.create({
 
-    return res.json({ success: true, batch });
+          name: req.body.name,
 
-  } catch (e) {
+          category:
+            req.body.category ||
+            'Other Batch Tests',
 
-    console.error(e);
+          subgroup:
+            req.body.subgroup || '',
 
-    return res.status(400).json({
-      success: false,
-      message: e.message
-    });
+          exam:
+            req.body.exam || '',
+
+          language:
+            req.body.language || 'Hindi',
+
+          status:
+            req.body.status || 'Paid',
+
+          active:
+            req.body.active !== false,
+
+          sourceBatchId:
+            req.body.sourceBatchId ||
+            undefined
+        });
+
+
+      return res.json({
+        success: true,
+        batch
+      });
+
+    } catch (e) {
+
+      console.error(e);
+
+      return res.status(400).json({
+        success: false,
+        message: e.message
+      });
+    }
   }
-});
+);
 
 
 /* =====================================================
    UPDATE BATCH
 ===================================================== */
 
-app.put('/api/admin/batches/:id', auth, masterOnly, async (req, res) => {
+app.put(
+  '/api/admin/batches/:id',
+  auth,
+  masterOnly,
+  async (req, res) => {
 
-  try {
+    try {
 
-    const batch = await Batch.findByIdAndUpdate(
-      req.params.id,
-      { ...req.body, updatedAt: new Date() },
-      { new: true }
-    );
+      const batch =
+        await Batch.findByIdAndUpdate(
+          req.params.id,
+          {
+            ...req.body,
+            updatedAt: new Date()
+          },
+          {
+            new: true
+          }
+        );
 
-    if (!batch) {
-      return res.status(404).json({
+
+      if (!batch) {
+
+        return res.status(404).json({
+          success: false,
+          message: 'Batch not found'
+        });
+      }
+
+
+      return res.json({
+        success: true,
+        batch
+      });
+
+    } catch (e) {
+
+      return res.status(400).json({
         success: false,
-        message: 'Batch not found'
+        message: 'Update failed'
       });
     }
-
-    return res.json({ success: true, batch });
-
-  } catch (e) {
-
-    return res.status(400).json({
-      success: false,
-      message: 'Update failed'
-    });
   }
-});
+);
 
 
 /* =====================================================
    DELETE BATCH
 ===================================================== */
 
-app.delete('/api/admin/batches/:id', auth, masterOnly, async (req, res) => {
+app.delete(
+  '/api/admin/batches/:id',
+  auth,
+  masterOnly,
+  async (req, res) => {
 
-  try {
+    try {
 
-    await Test.deleteMany({ batchId: req.params.id });
-    await Batch.findByIdAndDelete(req.params.id);
+      await Test.deleteMany({
+        batchId: req.params.id
+      });
 
-    return res.json({ success: true });
+      await Batch.findByIdAndDelete(
+        req.params.id
+      );
 
-  } catch (e) {
 
-    return res.status(400).json({
-      success: false,
-      message: 'Delete failed'
-    });
+      return res.json({
+        success: true
+      });
+
+    } catch (e) {
+
+      return res.status(400).json({
+        success: false,
+        message: 'Delete failed'
+      });
+    }
   }
-});
+);
 
 
 /* =====================================================
    CONTENT LIST
 ===================================================== */
 
-app.get('/api/admin/batches/:id/content/:type', auth, async (req, res) => {
+app.get(
+  '/api/admin/batches/:id/content/:type',
+  auth,
+  async (req, res) => {
 
-  try {
+    try {
 
-    if (!canAccessBatch(req, req.params.id)) {
-      return res.status(403).json({
+      if (
+        !canAccessBatch(
+          req,
+          req.params.id
+        )
+      ) {
+
+        return res.status(403).json({
+          success: false,
+          message:
+            'You do not have access to this batch'
+        });
+      }
+
+
+      const type =
+        req.params.type === 'dpp' ||
+        req.params.type === 'dpps'
+          ? 'dpp'
+          : 'test';
+
+
+      const items =
+        await Test
+          .find({
+            batchId: req.params.id,
+            type
+          })
+          .sort({
+            startTime: -1,
+            createdAt: -1
+          });
+
+
+      return res.json({
+        success: true,
+        items
+      });
+
+    } catch (e) {
+
+      console.error(e);
+
+      return res.status(500).json({
         success: false,
-        message: 'You do not have access to this batch'
+        message:
+          'Failed to load content'
       });
     }
-
-    const type =
-      req.params.type === 'dpp' || req.params.type === 'dpps'
-        ? 'dpp'
-        : 'test';
-
-    const items = await Test
-      .find({ batchId: req.params.id, type })
-      .sort({ startTime: -1, createdAt: -1 });
-
-    return res.json({ success: true, items });
-
-  } catch (e) {
-
-    console.error(e);
-
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to load content'
-    });
   }
-});
+);
 
 
 /* =====================================================
@@ -697,31 +1200,68 @@ app.post(
 
     try {
 
-      const srcId = String(req.params.sourceBatchId);
+      const srcId =
+        String(
+          req.params.sourceBatchId
+        );
 
-      let batch = await Batch.findOne({ sourceBatchId: srcId });
+
+      let batch =
+        await Batch.findOne({
+          sourceBatchId: srcId
+        });
+
 
       if (!batch) {
 
-        const name = String(req.body.name || 'Source Batch').trim();
+        const name =
+          String(
+            req.body.name ||
+            'Source Batch'
+          ).trim();
 
-        batch = await Batch.create({
-          name,
-          category: req.body.category || 'Other Batch Tests',
-          subgroup: req.body.subgroup || '',
-          exam: req.body.exam || '',
-          language: req.body.language || 'Hindi',
-          status: req.body.status || 'Paid',
-          active: true,
-          sourceBatchId: srcId
-        });
+
+        batch =
+          await Batch.create({
+
+            name,
+
+            category:
+              req.body.category ||
+              'Other Batch Tests',
+
+            subgroup:
+              req.body.subgroup || '',
+
+            exam:
+              req.body.exam || '',
+
+            language:
+              req.body.language ||
+              'Hindi',
+
+            status:
+              req.body.status ||
+              'Paid',
+
+            active: true,
+
+            sourceBatchId: srcId
+          });
       }
 
-      return res.json({ success: true, batch });
+
+      return res.json({
+        success: true,
+        batch
+      });
 
     } catch (e) {
 
-      console.error('Local source batch error:', e);
+      console.error(
+        'Local source batch error:',
+        e
+      );
 
       return res.status(400).json({
         success: false,
@@ -736,85 +1276,153 @@ app.post(
    UPLOAD TEST / DPP
 ===================================================== */
 
-app.post('/api/admin/batches/:id/content/:type', auth, async (req, res) => {
+app.post(
+  '/api/admin/batches/:id/content/:type',
+  auth,
+  async (req, res) => {
 
-  try {
+    try {
 
-    if (!canAccessBatch(req, req.params.id)) {
-      return res.status(403).json({
+      if (
+        !canAccessBatch(
+          req,
+          req.params.id
+        )
+      ) {
+
+        return res.status(403).json({
+          success: false,
+          message:
+            'You do not have access to this batch'
+        });
+      }
+
+
+      const type =
+        req.params.type === 'dpp' ||
+        req.params.type === 'dpps'
+          ? 'dpp'
+          : 'test';
+
+
+      const questions =
+        Array.isArray(req.body.questions)
+          ? req.body.questions
+          : [];
+
+
+      const title =
+        String(
+          req.body.title ||
+          'Untitled'
+        ).trim();
+
+
+      const item =
+        await Test.create({
+
+          batchId:
+            req.params.id,
+
+          type,
+
+          title,
+
+          instructions:
+            req.body.instructions || '',
+
+          startTime:
+            req.body.startTime || null,
+
+          questions,
+
+          totalQuestions:
+            questions.length,
+
+          published:
+            req.body.published !== false,
+
+          uploadedAt:
+            new Date(),
+
+          updatedAt:
+            new Date()
+        });
+
+
+      return res.json({
+        success: true,
+        item
+      });
+
+    } catch (e) {
+
+      console.error(
+        'Upload error:',
+        e
+      );
+
+      return res.status(400).json({
         success: false,
-        message: 'You do not have access to this batch'
+        message: e.message
       });
     }
-
-    const type =
-      req.params.type === 'dpp' || req.params.type === 'dpps'
-        ? 'dpp'
-        : 'test';
-
-    const questions = Array.isArray(req.body.questions)
-      ? req.body.questions
-      : [];
-
-    const title = String(req.body.title || 'Untitled').trim();
-
-    const item = await Test.create({
-      batchId: req.params.id,
-      type,
-      title,
-      instructions: req.body.instructions || '',
-      startTime: req.body.startTime || null,
-      questions,
-      totalQuestions: questions.length,
-      published: req.body.published !== false,
-      uploadedAt: new Date(),
-      updatedAt: new Date()
-    });
-
-    return res.json({ success: true, item });
-
-  } catch (e) {
-
-    console.error('Upload error:', e);
-
-    return res.status(400).json({
-      success: false,
-      message: e.message
-    });
   }
-});
+);
 
 
 /* =====================================================
    PUBLISH / UNPUBLISH
 ===================================================== */
 
-async function setPublished(req, res, value, failMessage) {
+async function setPublished(
+  req,
+  res,
+  value,
+  failMessage
+) {
 
   try {
 
-    const item = await Test.findById(req.params.id);
+    const item =
+      await Test.findById(
+        req.params.id
+      );
+
 
     if (!item) {
+
       return res.status(404).json({
         success: false,
         message: 'Content not found'
       });
     }
 
-    if (!canAccessBatch(req, item.batchId)) {
+
+    if (
+      !canAccessBatch(
+        req,
+        item.batchId
+      )
+    ) {
+
       return res.status(403).json({
         success: false,
         message: 'Access denied'
       });
     }
 
+
     item.published = value;
     item.updatedAt = new Date();
 
     await item.save();
 
-    return res.json({ success: true, item });
+
+    return res.json({
+      success: true,
+      item
+    });
 
   } catch (e) {
 
@@ -825,12 +1433,30 @@ async function setPublished(req, res, value, failMessage) {
   }
 }
 
-app.post('/api/admin/content/:id/publish', auth, (req, res) =>
-  setPublished(req, res, true, 'Publish failed')
+
+app.post(
+  '/api/admin/content/:id/publish',
+  auth,
+  (req, res) =>
+    setPublished(
+      req,
+      res,
+      true,
+      'Publish failed'
+    )
 );
 
-app.post('/api/admin/content/:id/unpublish', auth, (req, res) =>
-  setPublished(req, res, false, 'Unpublish failed')
+
+app.post(
+  '/api/admin/content/:id/unpublish',
+  auth,
+  (req, res) =>
+    setPublished(
+      req,
+      res,
+      false,
+      'Unpublish failed'
+    )
 );
 
 
@@ -838,185 +1464,359 @@ app.post('/api/admin/content/:id/unpublish', auth, (req, res) =>
    DELETE CONTENT
 ===================================================== */
 
-app.delete('/api/admin/content/:id', auth, async (req, res) => {
+app.delete(
+  '/api/admin/content/:id',
+  auth,
+  async (req, res) => {
 
-  try {
+    try {
 
-    const item = await Test.findById(req.params.id);
+      const item =
+        await Test.findById(
+          req.params.id
+        );
 
-    if (!item) {
-      return res.status(404).json({
+
+      if (!item) {
+
+        return res.status(404).json({
+          success: false,
+          message: 'Content not found'
+        });
+      }
+
+
+      if (
+        !canAccessBatch(
+          req,
+          item.batchId
+        )
+      ) {
+
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied'
+        });
+      }
+
+
+      await Test.findByIdAndDelete(
+        req.params.id
+      );
+
+
+      return res.json({
+        success: true
+      });
+
+    } catch (e) {
+
+      return res.status(400).json({
         success: false,
-        message: 'Content not found'
+        message: 'Delete failed'
       });
     }
-
-    if (!canAccessBatch(req, item.batchId)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied'
-      });
-    }
-
-    await Test.findByIdAndDelete(req.params.id);
-
-    return res.json({ success: true });
-
-  } catch (e) {
-
-    return res.status(400).json({
-      success: false,
-      message: 'Delete failed'
-    });
   }
-});
+);
 
 
 /* =====================================================
    STATS
 ===================================================== */
 
-app.get('/api/admin/stats', auth, async (req, res) => {
+app.get(
+  '/api/admin/stats',
+  auth,
+  async (req, res) => {
 
-  try {
+    try {
 
-    let batchFilter = {};
+      let batchFilter = {};
 
-    if (req.user.scope !== 'all') {
-      batchFilter = {
-        batchId: { $in: await getAllowedBatchIds(req) }
-      };
+
+      if (req.user.scope !== 'all') {
+
+        batchFilter = {
+          batchId: {
+            $in:
+              await getAllowedBatchIds(req)
+          }
+        };
+      }
+
+
+      const batches =
+        req.user.scope === 'all'
+
+          ? await Batch.countDocuments()
+
+          : await Batch.countDocuments({
+              _id: {
+                $in:
+                  await getAllowedBatchIds(req)
+              }
+            });
+
+
+      const tests =
+        await Test.countDocuments({
+          ...batchFilter,
+          type: 'test'
+        });
+
+
+      const dpps =
+        await Test.countDocuments({
+          ...batchFilter,
+          type: 'dpp'
+        });
+
+
+      const published =
+        await Test.countDocuments({
+          ...batchFilter,
+          published: true
+        });
+
+
+      return res.json({
+        success: true,
+        batches,
+        tests,
+        dpps,
+        published
+      });
+
+    } catch (e) {
+
+      console.error(e);
+
+      return res.status(500).json({
+        success: false,
+        message:
+          'Failed to load stats'
+      });
     }
-
-    const batches =
-      req.user.scope === 'all'
-        ? await Batch.countDocuments()
-        : await Batch.countDocuments({
-            _id: { $in: await getAllowedBatchIds(req) }
-          });
-
-    const tests = await Test.countDocuments({ ...batchFilter, type: 'test' });
-    const dpps = await Test.countDocuments({ ...batchFilter, type: 'dpp' });
-    const published = await Test.countDocuments({
-      ...batchFilter,
-      published: true
-    });
-
-    return res.json({ success: true, batches, tests, dpps, published });
-
-  } catch (e) {
-
-    console.error(e);
-
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to load stats'
-    });
   }
-});
+);
 
 
 /* =====================================================
    UPLOADER TOKENS
 ===================================================== */
 
-app.get('/api/admin/uploader-tokens', auth, masterOnly, async (req, res) => {
+app.get(
+  '/api/admin/uploader-tokens',
+  auth,
+  masterOnly,
+  async (req, res) => {
 
-  try {
+    try {
 
-    const tokens = await UploaderToken
-      .find()
-      .populate('batchIds', 'name status category sourceBatchId')
-      .sort({ createdAt: -1 })
-      .lean();
+      const tokens =
+        await UploaderToken
+          .find()
+          .populate(
+            'batchIds',
+            'name status category sourceBatchId'
+          )
+          .sort({
+            createdAt: -1
+          })
+          .lean();
 
-    const result = tokens.map((t) => ({
-      id: t._id,
-      name: t.name,
-      active: t.active,
-      createdAt: t.createdAt,
-      batches: t.batchIds || []
-    }));
 
-    return res.json({ success: true, tokens: result });
+      const result =
+        tokens.map(t => ({
 
-  } catch (e) {
+          id: t._id,
 
-    console.error(e);
+          name: t.name,
 
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to load uploader tokens'
-    });
+          active: t.active,
+
+          createdAt: t.createdAt,
+
+          batches:
+            t.batchIds || []
+        }));
+
+
+      return res.json({
+        success: true,
+        tokens: result
+      });
+
+    } catch (e) {
+
+      console.error(e);
+
+      return res.status(500).json({
+        success: false,
+        message:
+          'Failed to load uploader tokens'
+      });
+    }
   }
-});
+);
 
 
-app.post('/api/admin/uploader-tokens', auth, masterOnly, async (req, res) => {
+/* =====================================================
+   CREATE UPLOADER TOKEN
+===================================================== */
 
-  try {
+app.post(
+  '/api/admin/uploader-tokens',
+  auth,
+  masterOnly,
+  async (req, res) => {
 
-    const name = String(req.body.name || '').trim();
+    try {
 
-    const batchIds = Array.isArray(req.body.batchIds)
-      ? req.body.batchIds
-      : [];
+      const name =
+        String(
+          req.body.name || ''
+        ).trim();
 
-    if (!name) {
-      return res.status(400).json({
-        success: false,
-        message: 'Token name is required'
-      });
-    }
 
-    if (!batchIds.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'Select at least one batch'
-      });
-    }
+      const batchIds =
+        Array.isArray(
+          req.body.batchIds
+        )
+          ? req.body.batchIds
+          : [];
 
-    const batches = await Batch.find({ _id: { $in: batchIds } });
 
-    if (batches.length !== batchIds.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'One or more batches are invalid'
-      });
-    }
+      if (!name) {
 
-    const plainToken = generateUploaderToken();
-    const tokenHash = hashToken(plainToken);
-
-    const uploader = await UploaderToken.create({
-      name,
-      tokenHash,
-      batchIds,
-      active: true
-    });
-
-    return res.json({
-      success: true,
-      token: plainToken,
-      uploader: {
-        id: uploader._id,
-        name: uploader.name,
-        batchIds: uploader.batchIds,
-        active: uploader.active
+        return res.status(400).json({
+          success: false,
+          message:
+            'Token name is required'
+        });
       }
-    });
 
-  } catch (e) {
 
-    console.error(e);
+      if (!batchIds.length) {
 
-    return res.status(400).json({
-      success: false,
-      message: e.message
-    });
+        return res.status(400).json({
+          success: false,
+          message:
+            'Select at least one batch'
+        });
+      }
+
+
+      const batches =
+        await Batch.find({
+          _id: {
+            $in: batchIds
+          }
+        });
+
+
+      if (
+        batches.length !==
+        batchIds.length
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'One or more batches are invalid'
+        });
+      }
+
+
+      /*
+        Source mapping check.
+
+        A scoped token should only be created
+        for local batches which are mapped to
+        source batches.
+      */
+
+      const unmapped =
+        batches.filter(
+          b =>
+            !b.sourceBatchId ||
+            !String(
+              b.sourceBatchId
+            ).trim()
+        );
+
+
+      if (unmapped.length) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'Selected batch is not mapped to a source batch yet'
+        });
+      }
+
+
+      const plainToken =
+        generateUploaderToken();
+
+
+      const tokenHash =
+        hashToken(
+          plainToken
+        );
+
+
+      const uploader =
+        await UploaderToken.create({
+
+          name,
+
+          tokenHash,
+
+          batchIds,
+
+          active: true
+        });
+
+
+      return res.json({
+
+        success: true,
+
+        token: plainToken,
+
+        uploader: {
+
+          id:
+            uploader._id,
+
+          name:
+            uploader.name,
+
+          batchIds:
+            uploader.batchIds,
+
+          active:
+            uploader.active
+        }
+      });
+
+    } catch (e) {
+
+      console.error(e);
+
+      return res.status(400).json({
+        success: false,
+        message: e.message
+      });
+    }
   }
-});
+);
 
+
+/* =====================================================
+   REVOKE UPLOADER TOKEN
+===================================================== */
 
 app.delete(
   '/api/admin/uploader-tokens/:id',
@@ -1026,15 +1826,24 @@ app.delete(
 
     try {
 
-      await UploaderToken.findByIdAndUpdate(req.params.id, { active: false });
+      await UploaderToken.findByIdAndUpdate(
+        req.params.id,
+        {
+          active: false
+        }
+      );
 
-      return res.json({ success: true });
+
+      return res.json({
+        success: true
+      });
 
     } catch (e) {
 
       return res.status(400).json({
         success: false,
-        message: 'Failed to revoke token'
+        message:
+          'Failed to revoke token'
       });
     }
   }
@@ -1048,33 +1857,71 @@ app.delete(
 async function boot() {
 
   if (!process.env.MONGO_URI) {
-    console.warn('MONGO_URI is required for persistent data.');
+
+    console.warn(
+      'MONGO_URI is required for persistent data.'
+    );
+
     return;
   }
 
-  await mongoose.connect(process.env.MONGO_URI);
 
-  console.log('MongoDB connected');
+  await mongoose.connect(
+    process.env.MONGO_URI
+  );
 
-  const username = process.env.ADMIN_USERNAME || 'admin';
-  const password = process.env.ADMIN_PASSWORD || 'change-me';
 
-  const exists = await User.findOne({ username });
+  console.log(
+    'MongoDB connected'
+  );
+
+
+  const username =
+    process.env.ADMIN_USERNAME ||
+    'admin';
+
+
+  const password =
+    process.env.ADMIN_PASSWORD ||
+    'change-me';
+
+
+  const exists =
+    await User.findOne({
+      username
+    });
+
 
   if (!exists) {
 
     await User.create({
+
       username,
-      passwordHash: await bcrypt.hash(password, 10),
-      role: 'Batch Uploader'
+
+      passwordHash:
+        await bcrypt.hash(
+          password,
+          10
+        ),
+
+      role:
+        'Batch Uploader'
     });
 
-    console.log('Default admin user created');
+
+    console.log(
+      'Default admin user created'
+    );
   }
 }
 
-boot().catch((e) => {
-  console.error('DB boot error:', e.message);
+
+boot().catch(e => {
+
+  console.error(
+    'DB boot error:',
+    e.message
+  );
 });
 
 
@@ -1082,6 +1929,12 @@ boot().catch((e) => {
    SERVER
 ===================================================== */
 
-app.listen(PORT, () => {
-  console.log(`ZX backend running on ${PORT}`);
-});
+app.listen(
+  PORT,
+  () => {
+
+    console.log(
+      `ZX backend running on ${PORT}`
+    );
+  }
+);
