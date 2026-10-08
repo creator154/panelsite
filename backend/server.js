@@ -616,7 +616,7 @@ app.post('/api/auth/login', async (req, res) => {
       }).populate('batchIds');
 
       if (!uploader) {
-        if (process.env.ALLOW_SOURCE_TOKEN_LOGIN !== 'true') {
+        if (process.env.ALLOW_SOURCE_TOKEN_LOGIN === 'false') {
           return res.status(401).json({
             success: false,
             message: 'Invalid or inactive auth token'
