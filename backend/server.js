@@ -616,6 +616,13 @@ app.post('/api/auth/login', async (req, res) => {
       }).populate('batchIds');
 
       if (!uploader) {
+        if (process.env.ALLOW_SOURCE_TOKEN_LOGIN !== 'true') {
+          return res.status(401).json({
+            success: false,
+            message: 'Invalid or inactive auth token'
+          });
+        }
+
         const sourceLogin = await loginWithSourceToken(authToken);
 
         if (!sourceLogin) {
@@ -1184,17 +1191,6 @@ app.post('/api/admin/uploader-tokens', auth, masterOnly, async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'One or more batches are invalid'
-      });
-    }
-
-    const unmapped = batches.filter(
-      b => !b.sourceBatchId || !String(b.sourceBatchId).trim()
-    );
-
-    if (unmapped.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'Selected batch is not mapped to a source batch yet'
       });
     }
 
