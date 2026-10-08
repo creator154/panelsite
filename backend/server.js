@@ -37,14 +37,6 @@ const PENPENCIL_BATCH_DETAILS_PATH =
   process.env.PENPENCIL_BATCH_DETAILS_PATH ||
   '/v3/batches/{batchId}/details';
 
-const PENPENCIL_TESTS_PATH =
-  process.env.PENPENCIL_TESTS_PATH ||
-  '/v3/test-service/tests/check-tests?testSource=BATCH_QUIZ&batchId={batchId}';
-
-const PENPENCIL_DPPS_PATH =
-  process.env.PENPENCIL_DPPS_PATH ||
-  '/v3/test-service/tests/dpp?batchId={batchId}&isSubjective=false';
-
 const PENPENCIL_TEST_DETAIL_PATH =
   process.env.PENPENCIL_TEST_DETAIL_PATH || '/v3/tests/{testId}';
 
@@ -114,11 +106,13 @@ function findOrgId(obj, depth = 0) {
 
 function sourceArray(data) {
   const candidates = [
-    data?.data,
-    data?.data?.data,
-    data?.data?.batches,
+    data?.data?.tests,
+    data?.data?.dpps,
     data?.data?.items,
     data?.data?.results,
+    data?.data?.batches,
+    data?.data?.data,
+    data?.data,
     data?.results,
     data?.items,
     data?.batches,
@@ -365,7 +359,7 @@ async function getAllowedSourceBatchIds(req) {
 }
 
 /* =====================================================
-   FIX: LOCAL BATCH ID -> SOURCE BATCH ID
+   LOCAL BATCH ID -> SOURCE BATCH ID
 ===================================================== */
 
 async function resolveSourceBatchId(req, batchId) {
@@ -375,14 +369,12 @@ async function resolveSourceBatchId(req, batchId) {
     throw new Error('Batch ID is required');
   }
 
-  // Already an upstream source ID in this user's session.
   const allowedSourceIds = sourceBatchSet(req);
 
   if (allowedSourceIds?.has(id)) {
     return id;
   }
 
-  // Resolve a local MongoDB batch ID.
   if (mongoose.Types.ObjectId.isValid(id)) {
     const localBatch = await Batch.findById(id)
       .select('sourceBatchId active')
@@ -397,7 +389,6 @@ async function resolveSourceBatchId(req, batchId) {
     }
   }
 
-  // Resolve an ID that is already stored as sourceBatchId.
   const sourceBatch = await Batch.findOne({
     sourceBatchId: id,
     active: true
@@ -412,7 +403,6 @@ async function resolveSourceBatchId(req, batchId) {
     return String(sourceBatch.sourceBatchId);
   }
 
-  // Master access may request an upstream ID not stored locally.
   if (req.user?.scope === 'all') {
     return id;
   }
@@ -1107,7 +1097,7 @@ app.get(
 );
 
 /* =====================================================
-   FIXED TESTS API
+   FIXED TESTS API WITH MULTI-ENDPOINT PROBE
 ===================================================== */
 
 app.get(
@@ -1128,15 +1118,36 @@ app.get(
         });
       }
 
-      const data = await penpencilRequest(
-        buildSourcePath(
-          PENPENCIL_TESTS_PATH,
-          { batchId: id }
-        ),
-        ppTokenOf(req)
-      );
+      // Probing candidate Test Endpoints
+      const testCandidates = [
+        `/v3/test-service/tests/my-tests?batchId=${id}`,
+        `/v3/test-service/tests/check-tests?testSource=BATCH_QUIZ&batchId=${id}&mode=1`,
+        `/v3/test-service/tests/check-tests?testSource=BATCH_QUIZ&batchId=${id}`,
+        `/batch-service/v1/batches/${id}/tests?page=1`,
+        `/v2/batches/${id}/test-series`
+      ];
 
-      const items = sourceArray(data);
+      let data = null;
+      let items = [];
+      let lastErr = null;
+
+      for (const endpoint of testCandidates) {
+        try {
+          data = await penpencilRequest(endpoint, ppTokenOf(req));
+          items = sourceArray(data);
+          if (items.length > 0) {
+            console.log(`Tests found using endpoint: ${endpoint}`);
+            break;
+          }
+        } catch (err) {
+          lastErr = err;
+          console.warn(`Test endpoint failed: ${endpoint}`, err.message);
+        }
+      }
+
+      if (items.length === 0 && !data && lastErr) {
+        throw lastErr;
+      }
 
       console.log(
         `Tests fetched for source batch ${id}: ${items.length}`
@@ -1144,7 +1155,7 @@ app.get(
 
       return res.json({
         success: true,
-        data,
+        data: data || {},
         items
       });
     } catch (error) {
@@ -1156,7 +1167,7 @@ app.get(
 );
 
 /* =====================================================
-   FIXED DPP API
+   FIXED DPP API WITH MULTI-ENDPOINT PROBE
 ===================================================== */
 
 app.get(
@@ -1177,15 +1188,36 @@ app.get(
         });
       }
 
-      const data = await penpencilRequest(
-        buildSourcePath(
-          PENPENCIL_DPPS_PATH,
-          { batchId: id }
-        ),
-        ppTokenOf(req)
-      );
+      // Probing candidate DPP Endpoints
+      const dppCandidates = [
+        `/v3/test-service/tests/dpp?batchId=${id}&isSubjective=false`,
+        `/v3/test-service/tests/check-tests?testSource=DPP&batchId=${id}`,
+        `/v3/test-service/tests/my-tests?batchId=${id}&type=DPP`,
+        `/batch-service/v1/batches/${id}/dpp?page=1`,
+        `/v2/batches/${id}/dpps`
+      ];
 
-      const items = sourceArray(data);
+      let data = null;
+      let items = [];
+      let lastErr = null;
+
+      for (const endpoint of dppCandidates) {
+        try {
+          data = await penpencilRequest(endpoint, ppTokenOf(req));
+          items = sourceArray(data);
+          if (items.length > 0) {
+            console.log(`DPPs found using endpoint: ${endpoint}`);
+            break;
+          }
+        } catch (err) {
+          lastErr = err;
+          console.warn(`DPP endpoint failed: ${endpoint}`, err.message);
+        }
+      }
+
+      if (items.length === 0 && !data && lastErr) {
+        throw lastErr;
+      }
 
       console.log(
         `DPPs fetched for source batch ${id}: ${items.length}`
@@ -1193,7 +1225,7 @@ app.get(
 
       return res.json({
         success: true,
-        data,
+        data: data || {},
         items
       });
     } catch (error) {
