@@ -3140,32 +3140,32 @@ app.post(
             ppTokenOf(req)
           );
 
-      } catch (detailError) {
+} catch (detailError) {
 
-        /*
-           DPP me agar detail API available
-           nahi hai to frontend ka sourceItem
-           fallback use hoga.
-        */
+  /*
+     PenPencil detail API test ya DPP dono ke liye
+     404 de sakta hai. Agar frontend sourceItem
+     bhej raha hai to usi se upload continue hoga.
+  */
 
-        if (
-          type === 'dpp' &&
-          req.body?.sourceItem
-        ) {
+  if (
+    req.body?.sourceItem &&
+    typeof req.body.sourceItem === 'object'
+  ) {
 
-          console.warn(
-            'DPP detail failed, using sourceItem fallback:',
-            detailError.message
-          );
+    console.warn(
+      'Source detail failed, using sourceItem fallback:',
+      detailError.message
+    );
 
-          sourceData =
-            req.body.sourceItem;
+    sourceData =
+      req.body.sourceItem;
 
-        } else {
+  } else {
 
-          throw detailError;
-        }
-      }
+    throw detailError;
+  }
+}
 
 
       /* -----------------------------------------
