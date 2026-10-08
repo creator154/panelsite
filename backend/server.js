@@ -28,14 +28,16 @@ const PENPENCIL_API_TOKEN = process.env.PENPENCIL_API_TOKEN || '';
 
 // Organization id header (fixes "Could not get organization details!")
 const PENPENCIL_CLIENT_ID =
-  process.env.PENPENCIL_CLIENT_ID || '5eb393ee95fab7468a79d189';
+  process.env.PENPENCIL_CLIENT_ID || '5eb393ee95fc740011883134';
+
+const PENPENCIL_ALT_CLIENT_ID = '5eb393ee95fab7468a79d189';
 
 const PENPENCIL_BASE = (
   process.env.PENPENCIL_BASE || 'https://api.penpencil.co'
 ).replace(/\/$/, '');
 
 const PENPENCIL_BATCHES_PATH =
-  process.env.PENPENCIL_BATCHES_PATH || '/v3/batches/my-batches';
+  process.env.PENPENCIL_BATCHES_PATH || '/v2/batches/my-batches?mode=1';
 
 const PENPENCIL_BATCH_DETAILS_PATH =
   process.env.PENPENCIL_BATCH_DETAILS_PATH || '/v3/batches/{batchId}/details';
@@ -134,7 +136,10 @@ async function penpencilRequest(path, tokenOverride) {
   let profiles;
 
   if (!tokenOverride) {
-    profiles = [{ id: PENPENCIL_CLIENT_ID, type: 'WEB' }];
+    profiles = [
+      { id: PENPENCIL_CLIENT_ID, type: 'WEB' },
+      { id: PENPENCIL_ALT_CLIENT_ID, type: 'WEB' }
+    ];
   } else if (profileCache.has(token)) {
     profiles = [profileCache.get(token)];
   } else {
@@ -146,7 +151,11 @@ async function penpencilRequest(path, tokenOverride) {
     );
 
     const org = findOrgId(payload);
-    const ids = [...new Set([org, PENPENCIL_CLIENT_ID].filter(Boolean))];
+    const ids = [
+      ...new Set(
+        [org, PENPENCIL_CLIENT_ID, PENPENCIL_ALT_CLIENT_ID].filter(Boolean)
+      )
+    ];
 
     profiles = [];
     for (const id of ids) {
@@ -329,8 +338,9 @@ const MAX_PAGES = Number(process.env.PENPENCIL_MAX_PAGES) || 25;
 const MAX_LOGIN_BATCHES = Number(process.env.PENPENCIL_MAX_BATCHES) || 100;
 
 async function fetchBatchPage(page, ppToken, basePath) {
-  const sep = basePath.includes('?') ? '&' : '?';
-  return penpencilRequest(`${basePath}${sep}page=${page}`, ppToken);
+  const cleanBase = basePath.replace(/([?&])page=\d+&?/, '$1').replace(/[?&]$/, '');
+  const sep = cleanBase.includes('?') ? '&' : '?';
+  return penpencilRequest(`${cleanBase}${sep}page=${page}`, ppToken);
 }
 
 async function fetchAllSourceBatches(
@@ -390,6 +400,7 @@ function ppTokenOf(req) {
   that token can see are given access.
 */
 const BATCH_PATH_CANDIDATES = [
+  '/v2/batches/my-batches?mode=1',
   '/v3/batches/all-purchased-batches?type=ALL',
   '/v3/batches/all-purchased-batches',
   '/v3/batches/purchased-batches',
@@ -447,7 +458,7 @@ async function loginWithSourceToken(ppToken) {
 
   const candidates = process.env.PENPENCIL_BATCHES_PATH
     ? [process.env.PENPENCIL_BATCHES_PATH]
-    : [...BATCH_PATH_CANDIDATES, PENPENCIL_BATCHES_PATH];
+    : [...new Set([...BATCH_PATH_CANDIDATES, PENPENCIL_BATCHES_PATH])];
 
   let list = null;
   let basePath = '';
@@ -585,7 +596,9 @@ app.get('/', (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body || {};
-    const authToken = String(req.body?.authToken || '').trim();
+    const authToken = String(req.body?.authToken || '')
+      .trim()
+      .replace(/^Bearer\s+/i, '');
 
     if (authToken) {
       /* MASTER AUTH TOKEN */
