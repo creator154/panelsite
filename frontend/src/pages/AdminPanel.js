@@ -5,22 +5,32 @@ const BACKEND_URL =
   'https://panel1-18e1d76be41d.herokuapp.com';
 
 export default function AdminPanel() {
-
   const [token, setToken] = useState('');
+  const [sessionToken, setSessionToken] = useState('');
+
   const [batches, setBatches] = useState([]);
   const [selectedBatch, setSelectedBatch] = useState(null);
+
   const [activeType, setActiveType] = useState('tests');
   const [items, setItems] = useState([]);
+
   const [loading, setLoading] = useState(false);
   const [uploadingId, setUploadingId] = useState(null);
 
-  /* =====================================================
-     LOAD SOURCE BATCHES
-  ===================================================== */
+  const authHeaders = () => ({
+    Authorization: `Bearer ${sessionToken}`
+  });
 
-  const fetchBatches = async () => {
+  /*
+   * =====================================================
+   * LOGIN WITH PW TOKEN
+   * =====================================================
+   */
 
-    if (!token.trim()) {
+  const loginAndFetchBatches = async () => {
+    const pwToken = token.trim();
+
+    if (!pwToken) {
       alert('Please enter your PW Auth Token.');
       return;
     }
@@ -28,51 +38,91 @@ export default function AdminPanel() {
     setLoading(true);
 
     try {
+      /*
+       * First authenticate the PW token.
+       * Backend returns our own JWT session token.
+       */
 
-      const res = await axios.post(
-        `${BACKEND_URL}/api/uploader/batches`,
+      const loginRes = await axios.post(
+        `${BACKEND_URL}/api/auth/login`,
         {
-          authToken: token.trim()
+          authToken: pwToken
         }
       );
 
-      console.log('Batches:', res.data);
+      if (!loginRes.data?.success || !loginRes.data?.token) {
+        throw new Error(
+          loginRes.data?.message ||
+          'Source login failed.'
+        );
+      }
 
-      setBatches(
-        Array.isArray(res.data?.batches)
-          ? res.data.batches
-          : []
+      const jwtToken = loginRes.data.token;
+
+      setSessionToken(jwtToken);
+
+      /*
+       * Now load source batches using JWT.
+       */
+
+      const batchRes = await axios.get(
+        `${BACKEND_URL}/api/admin/source/batches`,
+        {
+          headers: {
+            Authorization: `Bearer ${jwtToken}`
+          }
+        }
       );
 
-      if (!res.data?.batches?.length) {
-        alert('No batches found.');
+      const list = Array.isArray(
+        batchRes.data?.batches
+      )
+        ? batchRes.data.batches
+        : [];
+
+      setBatches(list);
+
+      if (!list.length) {
+        alert('No enrolled batches found.');
+      } else {
+        alert(
+          `${list.length} batches loaded successfully.`
+        );
       }
 
     } catch (err) {
-
       console.error(
-        'Batch error:',
+        'Login / Batch error:',
         err.response?.data || err.message
       );
 
+      setSessionToken('');
+      setBatches([]);
+      setSelectedBatch(null);
+      setItems([]);
+
       alert(
         err.response?.data?.message ||
-        'Error fetching batches. Please check your PW Auth Token.'
+        err.message ||
+        'Login failed. Please check your PW Auth Token.'
       );
-
     } finally {
-
       setLoading(false);
-
     }
   };
 
 
-  /* =====================================================
-     LOAD TESTS / DPPS
-  ===================================================== */
+  /*
+   * =====================================================
+   * LOAD TESTS / DPPS
+   * =====================================================
+   */
 
   const loadContent = async (batch, type) => {
+    if (!sessionToken) {
+      alert('Please login with PW Auth Token first.');
+      return;
+    }
 
     setSelectedBatch(batch);
     setActiveType(type);
@@ -80,39 +130,53 @@ export default function AdminPanel() {
     setLoading(true);
 
     try {
+      const sourceBatchId = String(
+        batch._id ||
+        batch.id ||
+        batch.batchId ||
+        batch.batch_id ||
+        ''
+      ).trim();
 
-      const res = await axios.post(
-        `${BACKEND_URL}/api/uploader/content`,
+      if (!sourceBatchId) {
+        throw new Error(
+          'Source batch ID not found.'
+        );
+      }
+
+      const endpoint =
+        type === 'dpps'
+          ? 'dpps'
+          : 'tests';
+
+      const res = await axios.get(
+        `${BACKEND_URL}/api/admin/source/batches/${encodeURIComponent(
+          sourceBatchId
+        )}/${endpoint}`,
         {
-          authToken: token.trim(),
-          batchId:
-            batch._id ||
-            batch.id ||
-            batch.batchId,
-          type
+          headers: authHeaders()
         }
       );
 
-      console.log(
-        `${type} response:`,
-        res.data
-      );
-
-      const list =
-        Array.isArray(res.data?.items)
-          ? res.data.items
-          : [];
+      const list = Array.isArray(
+        res.data?.items
+      )
+        ? res.data.items
+        : [];
 
       setItems(list);
 
       if (!list.length) {
         alert(
-          `No ${type === 'tests' ? 'tests' : 'DPPs'} found.`
+          `No ${
+            type === 'tests'
+              ? 'tests'
+              : 'DPPs'
+          } found.`
         );
       }
 
     } catch (err) {
-
       console.error(
         'Content error:',
         err.response?.data || err.message
@@ -120,22 +184,26 @@ export default function AdminPanel() {
 
       alert(
         err.response?.data?.message ||
-        'Error fetching items for this batch.'
+        err.message ||
+        'Error fetching content.'
       );
-
     } finally {
-
       setLoading(false);
-
     }
   };
 
 
-  /* =====================================================
-     UPLOAD TEST / DPP
-  ===================================================== */
+  /*
+   * =====================================================
+   * UPLOAD TEST / DPP
+   * =====================================================
+   */
 
   const uploadItem = async (item) => {
+    if (!sessionToken) {
+      alert('Please login first.');
+      return;
+    }
 
     if (!selectedBatch) {
       alert('Please select a batch first.');
@@ -146,6 +214,8 @@ export default function AdminPanel() {
       item._id ||
       item.id ||
       item.testId ||
+      item.test_id ||
+      item.testID ||
       item.sourceTestId ||
       ''
     ).trim();
@@ -156,10 +226,10 @@ export default function AdminPanel() {
     }
 
     const sourceBatchId = String(
-      selectedBatch.sourceBatchId ||
       selectedBatch._id ||
       selectedBatch.id ||
       selectedBatch.batchId ||
+      selectedBatch.batch_id ||
       ''
     ).trim();
 
@@ -168,59 +238,79 @@ export default function AdminPanel() {
       return;
     }
 
+    const apiType =
+      activeType === 'dpps'
+        ? 'dpp'
+        : 'test';
+
     setUploadingId(sourceTestId);
 
     try {
+      /*
+       * First check whether this item is already uploaded.
+       */
 
-      console.log(
-        'Uploading:',
+      const statusRes = await axios.get(
+        `${BACKEND_URL}/api/admin/source/batches/${encodeURIComponent(
+          sourceBatchId
+        )}/${apiType}/status`,
         {
-          sourceBatchId,
-          sourceTestId,
-          type: activeType,
-          item
+          headers: authHeaders()
         }
       );
 
-      const apiType =
-        activeType === 'dpps'
-          ? 'dpp'
-          : 'test';
+      const uploadedIds =
+        Array.isArray(
+          statusRes.data?.uploadedIds
+        )
+          ? statusRes.data.uploadedIds.map(String)
+          : [];
+
+      if (
+        uploadedIds.includes(sourceTestId)
+      ) {
+        alert(
+          `"${getTitle(item)}" is already uploaded.`
+        );
+        return;
+      }
+
+      /*
+       * Upload.
+       */
 
       const res = await axios.post(
-
         `${BACKEND_URL}/api/admin/source/batches/${encodeURIComponent(
           sourceBatchId
         )}/${apiType}/upload`,
-
         {
           sourceTestId,
 
+          /*
+           * Backend can use this if source detail
+           * endpoint doesn't return the expected data.
+           */
           sourceItem: item,
 
-          title:
-            item.title ||
-            item.name ||
-            'Untitled Test',
+          title: getTitle(item),
 
           instructions:
             item.instructions ||
+            item.instruction ||
             item.description ||
             '',
 
           startTime:
             item.startTime ||
             item.start_time ||
+            item.startDate ||
+            item.start_date ||
+            item.scheduledAt ||
             null
         },
-
         {
-          headers: {
-            Authorization:
-              `Bearer ${token.trim()}`
-          }
+          headers: authHeaders()
         }
-
       );
 
       console.log(
@@ -229,21 +319,21 @@ export default function AdminPanel() {
       );
 
       if (res.data?.skipped) {
-
         alert(
-          `"${item.title || item.name}" is already uploaded.`
+          `"${getTitle(item)}" is already uploaded.`
         );
-
+      } else if (res.data?.success) {
+        alert(
+          `"${getTitle(item)}" uploaded successfully!`
+        );
       } else {
-
         alert(
-          `"${item.title || item.name}" uploaded successfully!`
+          res.data?.message ||
+          'Upload response received.'
         );
-
       }
 
     } catch (err) {
-
       console.error(
         'Upload error:',
         err.response?.data || err.message
@@ -252,23 +342,39 @@ export default function AdminPanel() {
       alert(
         err.response?.data?.message ||
         err.response?.data?.error ||
+        err.message ||
         'Upload failed.'
       );
-
     } finally {
-
       setUploadingId(null);
-
     }
   };
 
 
-  /* =====================================================
-     UI
-  ===================================================== */
+  /*
+   * =====================================================
+   * HELPERS
+   * =====================================================
+   */
+
+  const getTitle = (item) => {
+    return (
+      item?.title ||
+      item?.name ||
+      item?.testName ||
+      item?.test_title ||
+      'Untitled Test'
+    );
+  };
+
+
+  /*
+   * =====================================================
+   * UI
+   * =====================================================
+   */
 
   return (
-
     <div
       className="container py-4"
       style={{
@@ -281,7 +387,7 @@ export default function AdminPanel() {
       </h3>
 
 
-      {/* TOKEN */}
+      {/* PW TOKEN */}
 
       <div className="card p-3 mb-3 shadow-sm">
 
@@ -303,7 +409,7 @@ export default function AdminPanel() {
 
           <button
             className="btn btn-primary"
-            onClick={fetchBatches}
+            onClick={loginAndFetchBatches}
             disabled={loading}
           >
             {loading
@@ -319,71 +425,82 @@ export default function AdminPanel() {
       {/* BATCHES */}
 
       {batches.length > 0 && (
-
         <div className="card p-3 mb-3 shadow-sm">
 
           <h5 className="fw-bold mb-2">
             Select Batch & Content Type
           </h5>
 
-          {batches.map((b) => (
+          {batches.map((batch) => {
 
-            <div
-              key={
-                b._id ||
-                b.id ||
-                b.batchId
-              }
-              className="d-flex justify-content-between align-items-center border-bottom py-2"
-            >
+            const batchId = String(
+              batch._id ||
+              batch.id ||
+              batch.batchId ||
+              batch.batch_id ||
+              ''
+            );
 
-              <span className="fw-semibold">
-                {b.name ||
-                  b.title ||
-                  'Unnamed Batch'}
-              </span>
+            return (
+              <div
+                key={batchId}
+                className="d-flex justify-content-between align-items-center border-bottom py-2"
+              >
 
-              <div className="btn-group">
+                <span className="fw-semibold">
+                  {batch.name ||
+                    batch.title ||
+                    'Unnamed Batch'}
+                </span>
 
-                <button
-                  className="btn btn-sm btn-outline-primary"
-                  onClick={() =>
-                    loadContent(b, 'tests')
-                  }
-                >
-                  📄 Load Tests
-                </button>
+                <div className="btn-group">
 
-                <button
-                  className="btn btn-sm btn-outline-success"
-                  onClick={() =>
-                    loadContent(b, 'dpps')
-                  }
-                >
-                  📚 Load DPPs
-                </button>
+                  <button
+                    className="btn btn-sm btn-outline-primary"
+                    onClick={() =>
+                      loadContent(
+                        batch,
+                        'tests'
+                      )
+                    }
+                    disabled={loading}
+                  >
+                    📄 Load Tests
+                  </button>
+
+                  <button
+                    className="btn btn-sm btn-outline-success"
+                    onClick={() =>
+                      loadContent(
+                        batch,
+                        'dpps'
+                      )
+                    }
+                    disabled={loading}
+                  >
+                    📚 Load DPPs
+                  </button>
+
+                </div>
 
               </div>
-
-            </div>
-
-          ))}
+            );
+          })}
 
         </div>
-
       )}
 
 
       {/* ITEMS */}
 
       {selectedBatch && (
-
         <div className="card p-3 shadow-sm">
 
           <h5 className="fw-bold mb-3">
 
             {selectedBatch.name ||
-              selectedBatch.title}
+              selectedBatch.title ||
+              'Selected Batch'}
 
             {' — '}
 
@@ -393,21 +510,17 @@ export default function AdminPanel() {
 
 
           {loading && (
-
             <div className="text-center py-3">
               Loading...
             </div>
-
           )}
 
 
           {!loading &&
             items.length === 0 && (
-
               <div className="text-muted text-center py-3">
                 No items found.
               </div>
-
             )}
 
 
@@ -418,22 +531,19 @@ export default function AdminPanel() {
                 item._id ||
                 item.id ||
                 item.testId ||
+                item.test_id ||
+                item.testID ||
                 item.sourceTestId ||
                 ''
               );
 
               const title =
-                item.title ||
-                item.name ||
-                item.testName ||
-                item.test_title ||
-                'Untitled Test';
+                getTitle(item);
 
               const isUploading =
                 uploadingId === id;
 
               return (
-
                 <div
                   key={id}
                   className="d-flex justify-content-between align-items-center mb-2 p-2 border rounded"
@@ -445,40 +555,34 @@ export default function AdminPanel() {
                       {title}
                     </strong>
 
-                    <div
-                      className="small text-muted"
-                    >
+                    <div className="small text-muted">
                       ID: {id}
                     </div>
 
                   </div>
-
 
                   <button
                     className="btn btn-sm btn-success"
                     onClick={() =>
                       uploadItem(item)
                     }
-                    disabled={isUploading}
+                    disabled={
+                      isUploading ||
+                      !sessionToken
+                    }
                   >
-
                     {isUploading
                       ? 'Uploading...'
                       : '☁ Upload'}
-
                   </button>
 
                 </div>
-
               );
-
             })}
 
         </div>
-
       )}
 
     </div>
-
   );
 }
