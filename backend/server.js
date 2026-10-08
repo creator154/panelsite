@@ -320,6 +320,49 @@ function getSourceBatchId(batch) {
   return String(batch._id || batch.id || batch.batchId || batch.batch_id || '');
 }
 
+/*
+  my-batches returns only one page at a time (20 items).
+  Keep asking for next pages until no new batch comes.
+*/
+async function fetchAllSourceBatches(ppToken) {
+  const all = [];
+  const seen = new Set();
+  let firstData = null;
+
+  for (let page = 1; page <= 25; page++) {
+    const sep = PENPENCIL_BATCHES_PATH.includes('?') ? '&' : '?';
+    let data;
+
+    try {
+      data = await penpencilRequest(
+        `${PENPENCIL_BATCHES_PATH}${sep}page=${page}`,
+        ppToken
+      );
+    } catch (e) {
+      if (page === 1) throw e;
+      break;
+    }
+
+    if (!firstData) firstData = data;
+
+    let added = 0;
+
+    for (const b of sourceArray(data)) {
+      const id = getSourceBatchId(b);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      all.push(b);
+      added++;
+    }
+
+    if (!added) break;
+  }
+
+  console.log('Source batches fetched (all pages):', all.length);
+
+  return { data: firstData, batches: all };
+}
+
 function ppTokenOf(req) {
   return (req.user && req.user.ppToken) || '';
 }
@@ -330,16 +373,15 @@ function ppTokenOf(req) {
   that token can see are given access.
 */
 async function loginWithSourceToken(ppToken) {
-  let data;
+  let list;
 
   try {
-    data = await penpencilRequest(PENPENCIL_BATCHES_PATH, ppToken);
+    list = (await fetchAllSourceBatches(ppToken)).batches;
   } catch (e) {
     console.error('Source token login failed:', e.message);
     return null;
   }
 
-  const list = sourceArray(data);
   if (!list.length) return null;
 
   const localIds = [];
@@ -561,9 +603,17 @@ app.get('/api/admin/source/batches', auth, async (req, res) => {
   try {
     console.log('Loading source batches...');
 
-    const data = await penpencilRequest(PENPENCIL_BATCHES_PATH, ppTokenOf(req));
+    const usedToken = ppTokenOf(req);
 
-    let batches = sourceArray(data);
+    console.log(
+      'Source list using:',
+      usedToken ? 'USER TOKEN ending ' + usedToken.slice(-6) : 'CONFIG TOKEN'
+    );
+
+    const fetched = await fetchAllSourceBatches(usedToken);
+    const data = fetched.data;
+
+    let batches = fetched.batches;
 
     console.log('Source batches from API:', batches.length);
 
