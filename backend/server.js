@@ -217,7 +217,8 @@ function sign(user) {
       role: user.role,
       scope: user.scope || 'all',
       batchIds: (user.batchIds || []).map(String),
-      ppToken: user.ppToken || ''
+      ppToken: user.ppToken || '',
+      bp: user.bp || ''
     },
     JWT_SECRET,
     { expiresIn: '7d' }
@@ -327,28 +328,29 @@ function getSourceBatchId(batch) {
 const MAX_PAGES = Number(process.env.PENPENCIL_MAX_PAGES) || 25;
 const MAX_LOGIN_BATCHES = Number(process.env.PENPENCIL_MAX_BATCHES) || 100;
 
-async function fetchBatchPage(page, ppToken) {
-  const sep = PENPENCIL_BATCHES_PATH.includes('?') ? '&' : '?';
-  return penpencilRequest(
-    `${PENPENCIL_BATCHES_PATH}${sep}page=${page}`,
-    ppToken
-  );
+async function fetchBatchPage(page, ppToken, basePath) {
+  const sep = basePath.includes('?') ? '&' : '?';
+  return penpencilRequest(`${basePath}${sep}page=${page}`, ppToken);
 }
 
-async function fetchAllSourceBatches(ppToken) {
+async function fetchAllSourceBatches(
+  ppToken,
+  basePath = PENPENCIL_BATCHES_PATH,
+  maxPages = MAX_PAGES
+) {
   const all = [];
   const seen = new Set();
   let firstData = null;
 
-  for (let start = 1; start <= MAX_PAGES; start += 4) {
+  for (let start = 1; start <= maxPages; start += 4) {
     const pages = [];
-    for (let p = start; p < Math.min(start + 4, MAX_PAGES + 1); p++) {
+    for (let p = start; p < Math.min(start + 4, maxPages + 1); p++) {
       pages.push(p);
     }
 
     const results = await Promise.all(
       pages.map(p =>
-        fetchBatchPage(p, ppToken).catch(e => {
+        fetchBatchPage(p, ppToken, basePath).catch(e => {
           if (p === 1) throw e;
           return null;
         })
@@ -387,15 +389,98 @@ function ppTokenOf(req) {
   Token is checked against PenPencil, then only the batches
   that token can see are given access.
 */
-async function loginWithSourceToken(ppToken) {
-  let list;
+const BATCH_PATH_CANDIDATES = [
+  '/v3/batches/all-purchased-batches?type=ALL',
+  '/v3/batches/all-purchased-batches',
+  '/v3/batches/purchased-batches',
+  '/v3/batches/my-batches?filter=true&amount=paid'
+];
 
+// Looks like a real JWT: 3 parts, readable payload, not expired
+function looksLikeJwt(t) {
+  const parts = String(t).split('.');
+  if (parts.length !== 3 || parts.some(p => !p)) return false;
+
+  const payload = decodeJwtPayload(t);
+  if (!payload || typeof payload !== 'object') return false;
+
+  if (payload.exp && payload.exp * 1000 < Date.now()) return false;
+
+  return true;
+}
+
+/*
+  A route is only useful if it returns DIFFERENT batches for a
+  real token than for a fake token. If both give the same list,
+  the route is a public catalog and not the user's own batches.
+*/
+async function checkUserSpecific(path, ppToken) {
+  const idsOf = data =>
+    sourceArray(data).map(getSourceBatchId).filter(Boolean);
+
+  const mine = idsOf(await fetchBatchPage(1, ppToken, path));
+
+  if (!mine.length) return { ok: false, reason: 'empty list' };
+
+  let base = [];
   try {
-    list = (await fetchAllSourceBatches(ppToken)).batches;
-  } catch (e) {
-    console.error('Source token login failed:', e.message);
+    base = idsOf(
+      await fetchBatchPage(1, 'invalid.invalid.invalid', path)
+    );
+  } catch {
+    base = [];
+  }
+
+  const same =
+    base.length === mine.length && base.every(id => mine.includes(id));
+
+  if (same) return { ok: false, reason: 'same list for fake token (public catalog)' };
+
+  return { ok: true, reason: 'differs from fake token' };
+}
+
+async function loginWithSourceToken(ppToken) {
+  if (!looksLikeJwt(ppToken)) {
+    console.log('Source login rejected: token is not a valid JWT');
     return null;
   }
+
+  const candidates = process.env.PENPENCIL_BATCHES_PATH
+    ? [process.env.PENPENCIL_BATCHES_PATH]
+    : [...BATCH_PATH_CANDIDATES, PENPENCIL_BATCHES_PATH];
+
+  let list = null;
+  let basePath = '';
+
+  for (const cand of candidates) {
+    try {
+      const chk = await checkUserSpecific(cand, ppToken);
+
+      console.log(
+        'Batch route probe:',
+        cand,
+        chk.ok ? 'USER-SPECIFIC' : 'not usable - ' + chk.reason
+      );
+
+      if (chk.ok) {
+        basePath = cand;
+        list = (await fetchAllSourceBatches(ppToken, cand)).batches;
+        break;
+      }
+    } catch (e) {
+      console.log('Batch route probe:', cand, 'failed:', e.message);
+    }
+  }
+
+  if (!list || !list.length) {
+    console.error('No user-specific batch route worked for this token');
+    return {
+      success: false,
+      message: 'Could not load batches for this token'
+    };
+  }
+
+  console.log('Batch route used:', basePath, 'count:', list.length);
 
   if (!list.length) return null;
 
@@ -454,7 +539,8 @@ async function loginWithSourceToken(ppToken) {
     role: 'Batch Uploader',
     scope: 'batches',
     batchIds: localIds,
-    ppToken
+    ppToken,
+    bp: basePath
   });
 
   return {
@@ -532,6 +618,10 @@ app.post('/api/auth/login', async (req, res) => {
             success: false,
             message: 'Invalid or inactive auth token'
           });
+        }
+
+        if (sourceLogin.success === false) {
+          return res.status(502).json(sourceLogin);
         }
 
         return res.json(sourceLogin);
@@ -650,7 +740,10 @@ app.get('/api/admin/source/batches', auth, async (req, res) => {
       usedToken ? 'USER TOKEN ending ' + usedToken.slice(-6) : 'CONFIG TOKEN'
     );
 
-    const fetched = await fetchAllSourceBatches(usedToken);
+    const fetched = await fetchAllSourceBatches(
+      usedToken,
+      (usedToken && req.user.bp) || PENPENCIL_BATCHES_PATH
+    );
     const data = fetched.data;
 
     let batches = fetched.batches;
