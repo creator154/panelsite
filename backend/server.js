@@ -3140,32 +3140,32 @@ app.post(
             ppTokenOf(req)
           );
 
-} catch (detailError) {
+      } catch (detailError) {
 
-  /*
-     PenPencil detail API test ya DPP dono ke liye
-     404 de sakta hai. Agar frontend sourceItem
-     bhej raha hai to usi se upload continue hoga.
-  */
+        /*
+           PenPencil detail API test ya DPP dono ke liye
+           404 de sakta hai. Agar frontend sourceItem
+           bhej raha hai to usi se upload continue hoga.
+        */
 
-  if (
-    req.body?.sourceItem &&
-    typeof req.body.sourceItem === 'object'
-  ) {
+        if (
+          req.body?.sourceItem &&
+          typeof req.body.sourceItem === 'object'
+        ) {
 
-    console.warn(
-      'Source detail failed, using sourceItem fallback:',
-      detailError.message
-    );
+          console.warn(
+            'Source detail failed, using sourceItem fallback:',
+            detailError.message
+          );
 
-    sourceData =
-      req.body.sourceItem;
+          sourceData =
+            req.body.sourceItem;
 
-  } else {
+        } else {
 
-    throw detailError;
-  }
-}
+          throw detailError;
+        }
+      }
 
 
       /* -----------------------------------------
@@ -3351,6 +3351,31 @@ app.post(
 
         questions =
           sourceData.data;
+      }
+
+
+      /* -----------------------------------------
+         VALIDATE QUESTIONS
+      ----------------------------------------- */
+
+      if (!Array.isArray(questions) || questions.length === 0) {
+
+        console.error('Questions not found:', {
+          sourceTestId,
+          title,
+          sourceKeys:
+            source && typeof source === 'object'
+              ? Object.keys(source)
+              : []
+        });
+
+        return res.status(422).json({
+          success: false,
+          message: 'Questions nahi mile. Test save nahi hua.',
+          sourceTestId,
+          title,
+          questionsFound: 0
+        });
       }
 
 
