@@ -3164,6 +3164,24 @@ app.post(
           }
         );
 
+        // DEBUG: Check config structure
+        console.log(
+          'CONFIG KEYS:',
+          sourceData?.config &&
+          typeof sourceData.config === 'object'
+            ? Object.keys(sourceData.config)
+            : 'NO CONFIG'
+        );
+
+        console.log(
+          'CONFIG JSON:',
+          JSON.stringify(
+            sourceData?.config || null,
+            null,
+            2
+          )
+        );
+
       } catch (detailError) {
         /*
          * Detail API fail hone par frontend se
@@ -3196,6 +3214,25 @@ app.post(
               questionList: sourceData?.questionList?.length
             }
           );
+
+          // DEBUG: Check fallback config
+          console.log(
+            'FALLBACK CONFIG KEYS:',
+            sourceData?.config &&
+            typeof sourceData.config === 'object'
+              ? Object.keys(sourceData.config)
+              : 'NO CONFIG'
+          );
+
+          console.log(
+            'FALLBACK CONFIG JSON:',
+            JSON.stringify(
+              sourceData?.config || null,
+              null,
+              2
+            )
+          );
+
         } else {
           throw detailError;
         }
