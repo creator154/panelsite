@@ -3115,63 +3115,95 @@ app.post(
          FETCH SOURCE DETAIL
       ----------------------------------------- */
 
-      let sourceData =
-        null;
+      let sourceData = null;
 
       try {
-
-        const detailPath =
-          buildSourcePath(
-            PENPENCIL_TEST_DETAIL_PATH,
-            {
-              testId:
-                sourceTestId
-            }
-          );
+        const detailPath = buildSourcePath(
+          PENPENCIL_TEST_DETAIL_PATH,
+          {
+            testId: sourceTestId
+          }
+        );
 
         console.log(
           'Source upload detail:',
           detailPath
         );
 
-        sourceData =
-          await penpencilRequest(
-            detailPath,
-            ppTokenOf(req)
-          );
+        sourceData = await penpencilRequest(
+          detailPath,
+          ppTokenOf(req)
+        );
+
+        // DEBUG: Check the response structure
+        console.log(
+          'SOURCE DETAIL TOP-LEVEL KEYS:',
+          Object.keys(sourceData || {})
+        );
+
+        console.log(
+          'SOURCE DETAIL DATA KEYS:',
+          Object.keys(
+            sourceData?.data &&
+            typeof sourceData.data === 'object' &&
+            !Array.isArray(sourceData.data)
+              ? sourceData.data
+              : {}
+          )
+        );
+
+        console.log(
+          'SOURCE DETAIL QUESTION COUNTS:',
+          {
+            questions: sourceData?.questions?.length,
+            dataQuestions: sourceData?.data?.questions?.length,
+            testQuestions: sourceData?.test?.questions?.length,
+            resultQuestions: sourceData?.result?.questions?.length,
+            items: sourceData?.items?.length,
+            questionList: sourceData?.questionList?.length
+          }
+        );
 
       } catch (detailError) {
-
         /*
-           PenPencil detail API test ya DPP dono ke liye
-           404 de sakta hai. Agar frontend sourceItem
-           bhej raha hai to usi se upload continue hoga.
-        */
+         * Detail API fail hone par frontend se
+         * mila sourceItem use karne ki koshish.
+         */
 
         if (
           req.body?.sourceItem &&
           typeof req.body.sourceItem === 'object'
         ) {
-
           console.warn(
-            'Source detail failed, using sourceItem fallback:',
+            'Source detail failed; using sourceItem fallback:',
             detailError.message
           );
 
-          sourceData =
-            req.body.sourceItem;
+          sourceData = req.body.sourceItem;
 
+          console.log(
+            'SOURCE ITEM FALLBACK KEYS:',
+            Object.keys(sourceData || {})
+          );
+
+          console.log(
+            'SOURCE ITEM QUESTION COUNTS:',
+            {
+              questions: sourceData?.questions?.length,
+              dataQuestions: sourceData?.data?.questions?.length,
+              testQuestions: sourceData?.test?.questions?.length,
+              items: sourceData?.items?.length,
+              questionList: sourceData?.questionList?.length
+            }
+          );
         } else {
-
           throw detailError;
         }
       }
 
-
       /* -----------------------------------------
          NORMALIZE SOURCE RESPONSE
       ----------------------------------------- */
-
       let source =
         sourceData;
 
