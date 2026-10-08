@@ -13,282 +13,111 @@ const User = require('./models/User');
 const UploaderToken = require('./models/UploaderToken');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
 /* =========================================================
-   BASIC
+   CONFIG
 ========================================================= */
 
-app.use(cors({ origin: true }));
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+const PORT = process.env.PORT || 5000;
 
-app.disable('etag');
+const MONGO_URI =
+  process.env.MONGO_URI ||
+  process.env.MONGODB_URI;
 
 const JWT_SECRET =
-  process.env.JWT_SECRET || 'change-this-secret';
+  process.env.JWT_SECRET ||
+  'zx-panel-secret';
 
-const PENPENCIL_API_TOKEN =
-  process.env.PENPENCIL_API_TOKEN || '';
+const ADMIN_AUTH_TOKEN =
+  process.env.ADMIN_AUTH_TOKEN ||
+  '';
 
-const PENPENCIL_CLIENT_ID =
-  process.env.PENPENCIL_CLIENT_ID ||
-  '5eb393ee95fc740011883134';
-
-const PENPENCIL_ALT_CLIENT_ID =
-  '5eb393ee95fab7468a79d189';
-
-const PENPENCIL_BASE =
-  (process.env.PENPENCIL_BASE ||
-    'https://api.penpencil.co')
-    .replace(/\/$/, '');
-
-const PENPENCIL_BATCHES_PATH =
-  process.env.PENPENCIL_BATCHES_PATH ||
-  '/batch-service/v1/batches/purchased-batches?page=1&type=ALL&amount=paid';
-
-const PENPENCIL_BATCH_DETAILS_PATH =
-  process.env.PENPENCIL_BATCH_DETAILS_PATH ||
-  '/v3/batches/{batchId}/details';
-
-const PENPENCIL_CATEGORY_ID =
-  process.env.PENPENCIL_CATEGORY_ID ||
-  '677a62f6f0c53777312e65c7';
-
-const PENPENCIL_CATEGORY_SECTION_ID =
-  process.env.PENPENCIL_CATEGORY_SECTION_ID ||
-  '68c55614b4ebc9a2596e9246';
-
-const PENPENCIL_TESTS_PATH =
-  process.env.PENPENCIL_TESTS_PATH ||
-  '/v3/test-service/tests?testType=All&testStatus=All&attemptStatus=All&batchId={batchId}&isSubjective=false&categoryId={categoryId}&categorySectionId={categorySectionId}&isPurchased=true';
-
-const PENPENCIL_DPPS_PATH =
-  process.env.PENPENCIL_DPPS_PATH ||
-  '/v3/test-service/tests/dpp?batchId={batchId}&isSubjective=false';
-
-const PENPENCIL_TEST_DETAIL_PATH =
-  process.env.PENPENCIL_TEST_DETAIL_PATH ||
-  '/v3/tests/{testId}';
-
-const MAX_PAGES =
-  Math.max(
-    1,
-    Number(process.env.PENPENCIL_MAX_PAGES) || 500
-  );
-
-const SESSION_TTL_MS =
-  Math.max(
-    60000,
-    Number(process.env.SOURCE_SESSION_TTL_MS) ||
-      7 * 24 * 60 * 60 * 1000
-  );
-
-const sourceSessions = new Map();
-const profileCache = new Map();
-
+const PANEL_SOURCE_TOKEN =
+  process.env.PW_JWT_TOKEN ||
+  '';
 
 /* =========================================================
-   SCHEMA COMPATIBILITY
+   MIDDLEWARE
 ========================================================= */
 
-if (!Batch.schema.path('sourceBatchId')) {
-  Batch.schema.add({
-    sourceBatchId: {
-      type: String,
-      index: true
-    }
-  });
+app.use(cors({
+  origin: '*',
+  methods: [
+    'GET',
+    'POST',
+    'PUT',
+    'PATCH',
+    'DELETE',
+    'OPTIONS'
+  ],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization'
+  ]
+}));
+
+app.use(express.json({
+  limit: '10mb'
+}));
+
+app.use(express.urlencoded({
+  extended: true,
+  limit: '10mb'
+}));
+
+/* =========================================================
+   DATABASE
+========================================================= */
+
+if (!MONGO_URI) {
+  console.error('MONGO_URI / MONGODB_URI missing');
+  process.exit(1);
 }
 
-if (!Test.schema.path('sourceTestId')) {
-  Test.schema.add({
-    sourceTestId: {
-      type: String,
-      index: true
-    }
+mongoose
+  .connect(MONGO_URI)
+  .then(() => {
+    console.log('MongoDB connected');
+  })
+  .catch((err) => {
+    console.error(
+      'MongoDB connection error:',
+      err
+    );
   });
-}
-
-if (!Test.schema.path('sourceBatchId')) {
-  Test.schema.add({
-    sourceBatchId: {
-      type: String,
-      index: true
-    }
-  });
-}
-
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
-function decodeJwtPayload(token) {
-  try {
-    return JSON.parse(
-      Buffer
-        .from(
-          String(token).split('.')[1],
-          'base64url'
-        )
-        .toString()
-    );
-  } catch {
-    return null;
-  }
-}
+function normalizeType(type) {
 
+  const value =
+    String(type || '')
+      .toLowerCase()
+      .trim();
 
-function findOrgId(obj, depth = 0) {
   if (
-    !obj ||
-    typeof obj !== 'object' ||
-    depth > 4
+    value === 'dpp' ||
+    value === 'dpps'
   ) {
-    return '';
+    return 'dpp';
   }
 
-  for (const [key, value] of Object.entries(obj)) {
-
-    if (
-      /^(organizationId|orgId|organization_id)$/i.test(key) &&
-      typeof value === 'string'
-    ) {
-      return value;
-    }
-
-    if (/^organization$/i.test(key)) {
-
-      if (typeof value === 'string') {
-        return value;
-      }
-
-      if (
-        value &&
-        typeof value === 'object' &&
-        (value._id || value.id)
-      ) {
-        return String(
-          value._id || value.id
-        );
-      }
-    }
-  }
-
-  for (const value of Object.values(obj)) {
-
-    if (
-      value &&
-      typeof value === 'object'
-    ) {
-
-      const found =
-        findOrgId(
-          value,
-          depth + 1
-        );
-
-      if (found) {
-        return found;
-      }
-    }
-  }
-
-  return '';
+  return 'test';
 }
 
 
-/* =========================================================
-   SOURCE ARRAY
-========================================================= */
-
-function sourceArray(data) {
-
-  const candidates = [
-
-    data?.data,
-
-    data?.data?.data,
-
-    data?.data?.batches,
-
-    data?.data?.items,
-
-    data?.data?.results,
-
-    data?.results,
-
-    data?.items,
-
-    data?.batches,
-
-    data?.tests,
-
-    data?.dpps,
-
-    data
-
-  ];
-
-  for (const candidate of candidates) {
-
-    if (Array.isArray(candidate)) {
-      return candidate;
-    }
-  }
-
-  return [];
-}
-
-
-/* =========================================================
-   SOURCE IDS
-========================================================= */
-
-function getSourceBatchId(batch) {
-
-  return batch
-    ? String(
-        batch._id ||
-        batch.id ||
-        batch.batchId ||
-        batch.batch_id ||
-        ''
-      )
-    : '';
-}
-
-
-function getSourceTestId(item) {
-
-  return item
-    ? String(
-        item._id ||
-        item.id ||
-        item.testId ||
-        item.test_id ||
-        item.testID ||
-        ''
-      )
-    : '';
-}
-
-
-/* =========================================================
-   TOKEN
-========================================================= */
-
-function hashToken(token) {
+function sha256(value) {
 
   return crypto
     .createHash('sha256')
-    .update(String(token))
+    .update(String(value))
     .digest('hex');
 }
 
 
-function generateUploaderToken() {
+function makeToken() {
 
   return crypto
     .randomBytes(32)
@@ -296,191 +125,222 @@ function generateUploaderToken() {
 }
 
 
-function looksLikeJwt(token) {
+function safeObjectId(value) {
 
-  const parts =
-    String(token).split('.');
-
-  if (
-    parts.length !== 3 ||
-    parts.some(p => !p)
-  ) {
-    return false;
-  }
-
-  const payload =
-    decodeJwtPayload(token);
-
-  return !!payload &&
-    typeof payload === 'object' &&
-    (
-      !payload.exp ||
-      payload.exp * 1000 >= Date.now()
-    );
+  return mongoose.Types.ObjectId.isValid(
+    String(value || '')
+  );
 }
 
 
 /* =========================================================
-   PATH HELPERS
+   SOURCE API
 ========================================================= */
 
-function buildSourcePath(
-  template,
-  values = {}
+async function sourceFetch(
+  path,
+  options = {}
 ) {
 
-  let result =
-    String(template);
+  if (!PANEL_SOURCE_TOKEN) {
 
-  for (
-    const [key, value]
-    of Object.entries(values)
-  ) {
-
-    result =
-      result.replace(
-        new RegExp(
-          `\\{${key}\\}`,
-          'g'
-        ),
-        encodeURIComponent(
-          String(value)
-        )
-      );
+    throw new Error(
+      'PW_JWT_TOKEN is not configured'
+    );
   }
 
-  return result;
-}
-
-
-function withPage(
-  basePath,
-  page
-) {
-
-  const url =
-    new URL(
-      String(basePath),
-      'https://placeholder.invalid'
-    );
-
-  url.searchParams.set(
-    'page',
-    String(page)
+  const response = await fetch(
+    `https://api.penpencil.xyz${path}`,
+    {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        Authorization:
+          `Bearer ${PANEL_SOURCE_TOKEN}`,
+        Accept: 'application/json'
+      }
+    }
   );
 
-  return /^https?:\/\//i.test(
-    String(basePath)
-  )
-    ? url.toString()
-    : url.pathname + url.search;
+  const text =
+    await response.text();
+
+  let data;
+
+  try {
+    data =
+      JSON.parse(text);
+  } catch {
+    data = {
+      raw: text
+    };
+  }
+
+  if (!response.ok) {
+
+    const error =
+      new Error(
+        `Source API ${response.status}`
+      );
+
+    error.status =
+      response.status;
+
+    error.data =
+      data;
+
+    throw error;
+  }
+
+  return data;
+}
+
+
+function extractList(data) {
+
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  if (
+    data &&
+    Array.isArray(data.data)
+  ) {
+    return data.data;
+  }
+
+  if (
+    data &&
+    Array.isArray(data.items)
+  ) {
+    return data.items;
+  }
+
+  if (
+    data &&
+    data.data &&
+    Array.isArray(data.data.items)
+  ) {
+    return data.data.items;
+  }
+
+  return [];
 }
 
 
 /* =========================================================
-   DATE HELPER
+   BATCH HELPERS
 ========================================================= */
 
-function safeDate(value) {
+async function resolveSourceBatchId(id) {
 
-  if (
-    value === null ||
-    value === undefined ||
-    value === ''
-  ) {
-    return null;
+  const raw =
+    String(id || '').trim();
+
+  if (!raw) {
+    return '';
   }
 
-  const date =
-    new Date(value);
+  /* Already source batch ID */
+  const bySource =
+    await Batch.findOne({
+      sourceBatchId: raw,
+      active: true
+    })
+      .select('sourceBatchId')
+      .lean();
 
-  if (
-    Number.isNaN(
-      date.getTime()
-    )
-  ) {
-    return null;
+  if (bySource) {
+    return String(
+      bySource.sourceBatchId
+    );
   }
 
-  return date;
-}
-
-
-/* =========================================================
-   SESSION
-========================================================= */
-
-function cleanExpiredSessions() {
-
-  const now =
-    Date.now();
-
-  for (
-    const [key, value]
-    of sourceSessions
+  /* Local Mongo _id */
+  if (
+    safeObjectId(raw)
   ) {
+
+    const byId =
+      await Batch.findOne({
+        _id: raw,
+        active: true
+      })
+        .select('sourceBatchId')
+        .lean();
 
     if (
-      value.expiresAt <= now
+      byId &&
+      byId.sourceBatchId
     ) {
-      sourceSessions.delete(key);
+      return String(
+        byId.sourceBatchId
+      );
     }
   }
+
+  return raw;
 }
 
 
 /* =========================================================
-   JWT
+   IMPORTANT:
+   RESOLVE LOCAL BATCH ID FOR PUBLIC SITE
 ========================================================= */
 
-function sign(user) {
+async function resolveLocalBatchId(id) {
 
-  const payload = {
+  const raw =
+    String(id || '').trim();
 
-    sub:
-      String(
-        user._id ||
-        user.sub ||
-        ''
-      ),
+  if (!raw) {
+    return '';
+  }
 
-    username:
-      user.username ||
-      'Uploader',
-
-    role:
-      user.role ||
-      'Batch Uploader',
-
-    scope:
-      user.scope ||
-      'all'
-  };
+  /* -------------------------------------------------------
+     1. Direct Mongo _id
+  ------------------------------------------------------- */
 
   if (
-    user.scope === 'batches'
+    safeObjectId(raw)
   ) {
 
-    if (user.sessionId) {
+    const byId =
+      await Batch.findOne({
+        _id: raw,
+        active: true
+      })
+        .select('_id')
+        .lean();
 
-      payload.sid =
-        user.sessionId;
+    if (byId) {
 
-    } else {
-
-      payload.batchIds =
-        (user.batchIds || [])
-          .map(String);
+      return String(
+        byId._id
+      );
     }
   }
 
-  return jwt.sign(
-    payload,
-    JWT_SECRET,
-    {
-      expiresIn: '7d'
-    }
-  );
+  /* -------------------------------------------------------
+     2. Source batch ID
+  ------------------------------------------------------- */
+
+  const bySource =
+    await Batch.findOne({
+      sourceBatchId: raw,
+      active: true
+    })
+      .select('_id')
+      .lean();
+
+  if (bySource) {
+
+    return String(
+      bySource._id
+    );
+  }
+
+  return '';
 }
 
 
@@ -488,102 +348,120 @@ function sign(user) {
    AUTH
 ========================================================= */
 
-function auth(
+async function authMiddleware(
   req,
   res,
   next
 ) {
-
-  const token =
-    String(
-      req.headers.authorization || ''
-    ).replace(
-      /^Bearer\s+/i,
-      ''
-    );
-
-  if (!token) {
-
-    return res.status(401).json({
-
-      success: false,
-
-      message:
-        'Authentication required'
-    });
-  }
 
   try {
 
-    req.user =
-      jwt.verify(
-        token,
-        JWT_SECRET
-      );
+    const header =
+      req.headers.authorization ||
+      '';
 
-    if (req.user.sid) {
+    const token =
+      header.startsWith('Bearer ')
+        ? header.slice(7).trim()
+        : '';
 
-      cleanExpiredSessions();
+    if (!token) {
 
-      const session =
-        sourceSessions.get(
-          req.user.sid
-        );
-
-      if (!session) {
-
-        return res.status(401).json({
-
+      return res
+        .status(401)
+        .json({
           success: false,
-
-          message:
-            'Source login expired; please sign in again'
+          message: 'Authorization required'
         });
-      }
-
-      req.sourceSession =
-        session;
     }
 
-    next();
+    /* -----------------------------------------------------
+       ADMIN MASTER TOKEN
+    ----------------------------------------------------- */
 
-  } catch {
+    if (
+      ADMIN_AUTH_TOKEN &&
+      token === ADMIN_AUTH_TOKEN
+    ) {
 
-    return res.status(401).json({
+      req.auth = {
+        scope: 'all',
+        batchIds: []
+      };
 
-      success: false,
+      return next();
+    }
 
-      message:
-        'Invalid or expired token'
-    });
-  }
-}
+    /* -----------------------------------------------------
+       UPLOADER TOKEN
+    ----------------------------------------------------- */
 
+    const tokenHash =
+      sha256(token);
 
-function masterOnly(
-  req,
-  res,
-  next
-) {
+    const uploader =
+      await UploaderToken.findOne({
+        tokenHash,
+        active: true
+      });
 
-  if (
-    req.user?.scope === 'all'
-  ) {
+    if (!uploader) {
+
+      return res
+        .status(401)
+        .json({
+          success: false,
+          message: 'Invalid token'
+        });
+    }
+
+    if (
+      uploader.expiresAt &&
+      new Date(
+        uploader.expiresAt
+      ) < new Date()
+    ) {
+
+      return res
+        .status(401)
+        .json({
+          success: false,
+          message: 'Token expired'
+        });
+    }
+
+    req.auth = {
+      scope:
+        uploader.scope || 'batches',
+
+      batchIds:
+        uploader.batchIds || [],
+
+      uploaderId:
+        uploader._id
+    };
+
     return next();
+
+  } catch (e) {
+
+    console.error(
+      'Auth error:',
+      e
+    );
+
+    return res
+      .status(500)
+      .json({
+        success: false,
+        message: 'Authentication failed'
+      });
   }
-
-  return res.status(403).json({
-
-    success: false,
-
-    message:
-      'Master access required'
-  });
 }
 
 
 /* =========================================================
-   ACCESS
+   BATCH ACCESS
 ========================================================= */
 
 function canAccessBatch(
@@ -591,1023 +469,23 @@ function canAccessBatch(
   batchId
 ) {
 
-  if (!req.user) {
-    return false;
-  }
-
   if (
-    req.user.scope === 'all'
+    req.auth &&
+    req.auth.scope === 'all'
   ) {
     return true;
   }
 
-  if (
-    req.sourceSession?.localBatchIds
-      ?.has(String(batchId))
-  ) {
-    return true;
-  }
+  const allowed =
+    (req.auth &&
+      req.auth.batchIds) ||
+    [];
 
-  return (
-    req.user.batchIds || []
-  )
-    .map(String)
-    .includes(
+  return allowed.some(
+    id =>
+      String(id) ===
       String(batchId)
-    );
-}
-
-
-async function getAllowedBatchIds(req) {
-
-  if (
-    req.user.scope === 'all'
-  ) {
-    return null;
-  }
-
-  return (
-    req.user.batchIds || []
-  ).map(String);
-}
-
-
-function ppTokenOf(req) {
-
-  return (
-    req.sourceSession?.ppToken ||
-    ''
   );
-}
-
-
-function sourceBatchSet(req) {
-
-  return (
-    req.sourceSession?.sourceBatchIds ||
-    null
-  );
-}
-
-
-async function canAccessSourceBatch(
-  req,
-  sourceBatchId
-) {
-
-  if (!req.user) {
-    return false;
-  }
-
-  if (
-    req.user.scope === 'all'
-  ) {
-    return true;
-  }
-
-  const sessionSet =
-    sourceBatchSet(req);
-
-  if (sessionSet) {
-
-    return sessionSet.has(
-      String(sourceBatchId)
-    );
-  }
-
-  const localIds =
-    (req.user.batchIds || [])
-      .map(String);
-
-  if (!localIds.length) {
-    return false;
-  }
-
-  return !!(
-    await Batch.findOne({
-
-      _id: {
-        $in: localIds
-      },
-
-      sourceBatchId:
-        String(sourceBatchId),
-
-      active: true
-
-    })
-      .select('_id')
-      .lean()
-  );
-}
-
-
-async function getAllowedSourceBatchIds(
-  req
-) {
-
-  if (
-    req.user.scope === 'all'
-  ) {
-    return null;
-  }
-
-  const sessionSet =
-    sourceBatchSet(req);
-
-  if (sessionSet) {
-    return [...sessionSet];
-  }
-
-  const localIds =
-    (req.user.batchIds || [])
-      .map(String);
-
-  if (!localIds.length) {
-    return [];
-  }
-
-  const batches =
-    await Batch.find({
-
-      _id: {
-        $in: localIds
-      },
-
-      active: true,
-
-      sourceBatchId: {
-        $exists: true,
-        $ne: ''
-      }
-
-    })
-      .select('sourceBatchId')
-      .lean();
-
-  return batches
-    .map(
-      b => String(
-        b.sourceBatchId
-      )
-    )
-    .filter(Boolean);
-}
-
-
-/* =========================================================
-   PENPENCIL REQUEST
-========================================================= */
-
-async function penpencilCall(
-  url,
-  token,
-  clientId,
-  clientType
-) {
-
-  const response =
-    await fetch(
-      url,
-      {
-        method: 'GET',
-
-        headers: {
-
-          Authorization:
-            `Bearer ${token}`,
-
-          Accept:
-            '*/*',
-
-          'Content-Type':
-            'application/json',
-
-          'Client-Id':
-            clientId,
-
-          'Client-Type':
-            clientType,
-
-          'Client-Version':
-            '5.2.15',
-
-          Origin:
-            'https://www.pw.live',
-
-          Referer:
-            'https://www.pw.live/',
-
-          'User-Agent':
-            'Mozilla/5.0',
-
-          'x-sdk-version':
-            '0.0.28'
-        }
-      }
-    );
-
-  const bodyText =
-    await response.text();
-
-  let data = {};
-
-  try {
-
-    data =
-      bodyText
-        ? JSON.parse(bodyText)
-        : {};
-
-  } catch {
-
-    data = {
-      raw: bodyText
-    };
-  }
-
-  return {
-
-    ok:
-      response.ok,
-
-    status:
-      response.status,
-
-    data,
-
-    retryAfter:
-      response.headers.get(
-        'retry-after'
-      )
-  };
-}
-
-
-const sleep =
-  ms =>
-    new Promise(
-      resolve =>
-        setTimeout(
-          resolve,
-          ms
-        )
-    );
-
-
-async function penpencilRequest(
-  requestPath,
-  tokenOverride
-) {
-
-  const token =
-    tokenOverride ||
-    PENPENCIL_API_TOKEN;
-
-  if (!token) {
-
-    throw new Error(
-      'PenPencil token missing: sign in with your own token or configure PENPENCIL_API_TOKEN'
-    );
-  }
-
-  const cleanPath =
-    String(requestPath)
-      .startsWith('/')
-      ? String(requestPath)
-      : `/${requestPath}`;
-
-  const url =
-    /^https?:\/\//i.test(
-      cleanPath
-    )
-      ? cleanPath
-      : PENPENCIL_BASE +
-        cleanPath;
-
-  const payload =
-    decodeJwtPayload(token);
-
-  const org =
-    findOrgId(payload);
-
-  let profiles;
-
-  if (
-    profileCache.has(token)
-  ) {
-
-    profiles = [
-      profileCache.get(token)
-    ];
-
-  } else {
-
-    const ids =
-      [
-        org,
-        PENPENCIL_CLIENT_ID,
-        PENPENCIL_ALT_CLIENT_ID
-      ].filter(Boolean);
-
-    profiles =
-      [
-        ...new Set(ids)
-      ].flatMap(
-        id => [
-
-          {
-            id,
-            type: 'WEB'
-          },
-
-          {
-            id,
-            type: 'ANDROID'
-          }
-
-        ]
-      );
-  }
-
-  let last = {
-    status: 502,
-    data: {}
-  };
-
-  for (
-    const profile
-    of profiles
-  ) {
-
-    let result;
-
-    for (
-      let attempt = 0;
-      attempt < 4;
-      attempt++
-    ) {
-
-      result =
-        await penpencilCall(
-          url,
-          token,
-          profile.id,
-          profile.type
-        );
-
-      if (
-        result.status !== 429 &&
-        result.status < 500
-      ) {
-        break;
-      }
-
-      if (
-        attempt < 3
-      ) {
-
-        const retryMs =
-          Math.min(
-
-            30000,
-
-            Math.max(
-
-              1500,
-
-              Number(
-                result.retryAfter
-              ) * 1000 ||
-
-              1500 *
-                (attempt + 1)
-
-            )
-          );
-
-        await sleep(
-          retryMs
-        );
-      }
-    }
-
-    if (result.ok) {
-
-      if (
-        profileCache.size > 1000
-      ) {
-        profileCache.clear();
-      }
-
-      profileCache.set(
-        token,
-        profile
-      );
-
-      return result.data;
-    }
-
-    last = result;
-
-    if (
-      ![
-        400,
-        401,
-        403,
-        429
-      ].includes(
-        result.status
-      )
-    ) {
-      break;
-    }
-
-    if (
-      [401, 403].includes(
-        result.status
-      )
-    ) {
-      continue;
-    }
-
-    if (
-      result.status === 429
-    ) {
-      break;
-    }
-  }
-
-  const data =
-    last.data || {};
-
-  const message =
-    data.message ||
-    data.error?.message ||
-    (
-      typeof data.error === 'string'
-        ? data.error
-        : ''
-    ) ||
-    `PenPencil API returned ${last.status}`;
-
-  const error =
-    new Error(message);
-
-  error.upstreamStatus =
-    last.status;
-
-  throw error;
-}
-
-
-/* =========================================================
-   BATCH FETCH
-========================================================= */
-
-async function fetchBatchPage(
-  page,
-  token,
-  basePath
-) {
-
-  return penpencilRequest(
-    withPage(
-      basePath,
-      page
-    ),
-    token
-  );
-}
-
-
-async function fetchAllSourceBatches(
-  token,
-  basePath = PENPENCIL_BATCHES_PATH,
-  maxPages = MAX_PAGES
-) {
-
-  const all = [];
-  const seen = new Set();
-
-  let firstData = null;
-  let emptyPages = 0;
-
-  for (
-    let page = 1;
-    page <= maxPages;
-    page++
-  ) {
-
-    let data;
-
-    try {
-
-      data =
-        await fetchBatchPage(
-          page,
-          token,
-          basePath
-        );
-
-    } catch (e) {
-
-      if (
-        e.upstreamStatus === 429
-      ) {
-
-        console.warn(
-          `PenPencil page ${page} rate-limited after retries; stopping safely.`,
-          e.message
-        );
-
-        break;
-      }
-
-      if (page === 1) {
-        throw e;
-      }
-
-      console.warn(
-        `PenPencil page ${page} failed; stopping pagination:`,
-        e.message
-      );
-
-      break;
-    }
-
-    if (!firstData) {
-      firstData = data;
-    }
-
-    const rows =
-      sourceArray(data);
-
-    if (!rows.length) {
-      break;
-    }
-
-    let added = 0;
-
-    for (
-      const batch
-      of rows
-    ) {
-
-      const id =
-        getSourceBatchId(
-          batch
-        );
-
-      if (
-        !id ||
-        seen.has(id)
-      ) {
-        continue;
-      }
-
-      seen.add(id);
-      all.push(batch);
-      added++;
-    }
-
-    emptyPages =
-      added
-        ? 0
-        : emptyPages + 1;
-
-    if (
-      emptyPages >= 2
-    ) {
-      break;
-    }
-
-    await sleep(
-      Math.max(
-        250,
-        Number(
-          process.env.PENPENCIL_PAGE_DELAY_MS
-        ) || 700
-      )
-    );
-  }
-
-  console.log(
-    'Source batches fetched (unique):',
-    all.length
-  );
-
-  return {
-
-    data:
-      firstData,
-
-    batches:
-      all
-
-  };
-}
-
-
-/* =========================================================
-   BATCH ROUTES
-========================================================= */
-
-const BATCH_PATH_CANDIDATES = [
-
-  '/batch-service/v1/batches/purchased-batches?page=1&type=ALL&amount=paid',
-
-  '/v3/batches/my-batches?filter=true&amount=paid',
-
-  '/v2/batches/my-batches?mode=1',
-
-  '/v3/batches/all-purchased-batches?type=ALL',
-
-  '/v3/batches/all-purchased-batches',
-
-  '/v3/batches/purchased-batches'
-
-];
-
-
-async function checkUserSpecific(
-  requestPath,
-  token
-) {
-
-  const data =
-    await fetchBatchPage(
-      1,
-      token,
-      requestPath
-    );
-
-  const ids =
-    sourceArray(data)
-      .map(
-        getSourceBatchId
-      )
-      .filter(Boolean);
-
-  if (!ids.length) {
-
-    return {
-      ok: false,
-      reason: 'empty list'
-    };
-  }
-
-  return {
-
-    ok: true,
-
-    reason:
-      'authenticated route returned batches'
-  };
-}
-
-
-/* =========================================================
-   SOURCE LOGIN
-========================================================= */
-
-async function loginWithSourceToken(
-  ppToken
-) {
-
-  if (
-    !looksLikeJwt(ppToken)
-  ) {
-
-    return {
-
-      success: false,
-
-      message:
-        'Invalid or expired PenPencil JWT token'
-    };
-  }
-
-  const candidates =
-    process.env.PENPENCIL_BATCHES_PATH
-      ? [
-          process.env.PENPENCIL_BATCHES_PATH
-        ]
-      : [
-          ...new Set([
-            ...BATCH_PATH_CANDIDATES,
-            PENPENCIL_BATCHES_PATH
-          ])
-        ];
-
-  let list = null;
-  let basePath = '';
-  let firstError = '';
-
-  for (
-    const candidate
-    of candidates
-  ) {
-
-    try {
-
-      const check =
-        await checkUserSpecific(
-          candidate,
-          ppToken
-        );
-
-      if (check.ok) {
-
-        basePath =
-          candidate;
-
-        const fetched =
-          await fetchAllSourceBatches(
-            ppToken,
-            candidate
-          );
-
-        list =
-          fetched.batches;
-
-        if (
-          list.length
-        ) {
-          break;
-        }
-      }
-
-    } catch (e) {
-
-      firstError =
-        firstError ||
-        e.message;
-
-      console.warn(
-        'Batch route probe failed:',
-        candidate,
-        e.message
-      );
-    }
-  }
-
-  if (
-    !list ||
-    !list.length
-  ) {
-
-    return {
-
-      success: false,
-
-      message:
-        'Could not load batches for this token. ' +
-        (
-          firstError ||
-          'No batches returned; check token and API route.'
-        )
-    };
-  }
-
-  const sourceIds =
-    [
-      ...new Set(
-        list
-          .map(
-            getSourceBatchId
-          )
-          .filter(Boolean)
-      )
-    ];
-
-  for (
-    let i = 0;
-    i < list.length;
-    i += 250
-  ) {
-
-    const chunk =
-      list.slice(
-        i,
-        i + 250
-      );
-
-    const ops =
-      chunk.map(
-        item => {
-
-          const sourceBatchId =
-            getSourceBatchId(
-              item
-            );
-
-          return {
-
-            updateOne: {
-
-              filter: {
-                sourceBatchId
-              },
-
-              update: {
-
-                $setOnInsert: {
-
-                  name:
-                    String(
-                      item.name ||
-                      item.title ||
-                      'Source Batch'
-                    ).trim(),
-
-                  category:
-                    'Other Batch Tests',
-
-                  subgroup:
-                    '',
-
-                  exam:
-                    '',
-
-                  language:
-                    item.language ||
-                    'Hindi',
-
-                  status:
-                    'Paid',
-
-                  active:
-                    true,
-
-                  sourceBatchId
-
-                }
-
-              },
-
-              upsert:
-                true
-            }
-
-          };
-        }
-      );
-
-    if (ops.length) {
-
-      await Batch.bulkWrite(
-        ops,
-        {
-          ordered: false
-        }
-      );
-    }
-  }
-
-  cleanExpiredSessions();
-
-  const localRows =
-    await Batch.find({
-
-      sourceBatchId: {
-        $in:
-          sourceIds
-      },
-
-      active:
-        true
-
-    })
-      .select(
-        '_id sourceBatchId'
-      )
-      .lean();
-
-  const localBatchIds =
-    new Set(
-      localRows.map(
-        b => String(
-          b._id
-        )
-      )
-    );
-
-  const sessionId =
-    crypto
-      .randomBytes(24)
-      .toString('hex');
-
-  sourceSessions.set(
-    sessionId,
-    {
-
-      ppToken,
-
-      basePath,
-
-      sourceBatchIds:
-        new Set(
-          sourceIds
-        ),
-
-      localBatchIds,
-
-      expiresAt:
-        Date.now() +
-        SESSION_TTL_MS
-
-    }
-  );
-
-  const token =
-    sign({
-
-      _id:
-        'source-' +
-        hashToken(ppToken)
-          .slice(0, 12),
-
-      username:
-        'PW Batch Uploader',
-
-      role:
-        'Batch Uploader',
-
-      scope:
-        'batches',
-
-      sessionId
-
-    });
-
-  return {
-
-    success:
-      true,
-
-    token,
-
-    role:
-      'Batch Uploader',
-
-    scope:
-      'batches',
-
-    batchCount:
-      sourceIds.length
-
-  };
-}
-
-
-/* =========================================================
-   CONTENT TYPE
-========================================================= */
-
-function contentType(param) {
-
-  return (
-    param === 'dpp' ||
-    param === 'dpps'
-  )
-    ? 'dpp'
-    : 'test';
-}
-
-
-/* =========================================================
-   SOURCE ERROR
-========================================================= */
-
-function sourceError(
-  res,
-  error,
-  extra = {}
-) {
-
-  const status =
-    error.upstreamStatus === 429
-      ? 503
-      : 502;
-
-  return res
-    .status(status)
-    .json({
-
-      success:
-        false,
-
-      message:
-        error.message,
-
-      upstreamStatus:
-        error.upstreamStatus ||
-        null,
-
-      ...extra
-
-    });
 }
 
 
@@ -1616,54 +494,19 @@ function sourceError(
 ========================================================= */
 
 app.get(
-  '/health',
+  '/api/health',
   (req, res) => {
 
-    res.set(
-      'Cache-Control',
-      'no-store'
-    );
-
     res.json({
-
-      ok:
-        true,
-
-      service:
-        'zx-backend'
-
-    });
-  }
-);
-
-
-app.get(
-  '/',
-  (req, res) => {
-
-    res.set(
-      'Cache-Control',
-      'no-store'
-    );
-
-    res.json({
-
-      ok:
-        true,
-
-      service:
-        'zx-backend',
-
-      message:
-        'ZX backend is running'
-
+      success: true,
+      message: 'ZX backend running'
     });
   }
 );
 
 
 /* =========================================================
-   LOGIN
+   AUTH LOGIN
 ========================================================= */
 
 app.post(
@@ -1672,260 +515,117 @@ app.post(
 
     try {
 
-      const {
-        username,
-        password
-      } = req.body || {};
-
       const authToken =
         String(
-          req.body?.authToken ||
+          req.body.token ||
+          req.body.authToken ||
           ''
-        )
-          .trim()
-          .replace(
-            /^Bearer\s+/i,
-            ''
-          );
+        ).trim();
 
-      if (authToken) {
-
-        /* MASTER TOKEN */
-
-        if (
-          process.env.ADMIN_AUTH_TOKEN &&
-          authToken ===
-            process.env.ADMIN_AUTH_TOKEN
-        ) {
-
-          const token =
-            sign({
-
-              _id:
-                'master-token-user',
-
-              username:
-                'Master Admin',
-
-              role:
-                'Batch Uploader',
-
-              scope:
-                'all',
-
-              batchIds:
-                []
-
-            });
-
-          return res.json({
-
-            success:
-              true,
-
-            token,
-
-            role:
-              'Batch Uploader',
-
-            scope:
-              'all'
-
-          });
-        }
-
-
-        /* UPLOADER TOKEN */
-
-        const uploader =
-          await UploaderToken.findOne({
-
-            tokenHash:
-              hashToken(
-                authToken
-              ),
-
-            active:
-              true
-
-          })
-            .populate(
-              'batchIds'
-            );
-
-        if (uploader) {
-
-          const assignedBatchIds =
-            (uploader.batchIds || [])
-              .map(
-                b => b?._id
-              )
-              .filter(Boolean)
-              .map(String);
-
-          const token =
-            sign({
-
-              _id:
-                uploader._id,
-
-              username:
-                uploader.name,
-
-              role:
-                'Batch Uploader',
-
-              scope:
-                'batches',
-
-              batchIds:
-                assignedBatchIds
-
-            });
-
-          return res.json({
-
-            success:
-              true,
-
-            token,
-
-            role:
-              'Batch Uploader',
-
-            scope:
-              'batches',
-
-            batchIds:
-              assignedBatchIds
-
-          });
-        }
-
-
-        /* SOURCE TOKEN */
-
-        if (
-          process.env.ALLOW_SOURCE_TOKEN_LOGIN ===
-          'false'
-        ) {
-
-          return res
-            .status(401)
-            .json({
-
-              success:
-                false,
-
-              message:
-                'Invalid or inactive auth token'
-
-            });
-        }
-
-        const sourceLogin =
-          await loginWithSourceToken(
-            authToken
-          );
-
-        if (
-          !sourceLogin.success
-        ) {
-
-          return res
-            .status(502)
-            .json(
-              sourceLogin
-            );
-        }
-
-        return res.json(
-          sourceLogin
-        );
-      }
-
-
-      /* USERNAME / PASSWORD */
-
-      if (
-        !username ||
-        !password
-      ) {
+      if (!authToken) {
 
         return res
           .status(400)
           .json({
-
-            success:
-              false,
-
-            message:
-              'Username and password required'
-
+            success: false,
+            message: 'Token required'
           });
       }
 
-      const user =
-        await User.findOne({
-          username
-        });
+      /* ---------------------------------------------------
+         ADMIN TOKEN
+      --------------------------------------------------- */
 
       if (
-        !user ||
-        !(
-          await bcrypt.compare(
-            password,
-            user.passwordHash
-          )
-        )
+        ADMIN_AUTH_TOKEN &&
+        authToken === ADMIN_AUTH_TOKEN
+      ) {
+
+        const jwtToken =
+          jwt.sign(
+            {
+              scope: 'all',
+              batchIds: []
+            },
+            JWT_SECRET,
+            {
+              expiresIn: '7d'
+            }
+          );
+
+        return res.json({
+          success: true,
+          token: jwtToken,
+          scope: 'all',
+          batchIds: []
+        });
+      }
+
+      /* ---------------------------------------------------
+         UPLOADER TOKEN
+      --------------------------------------------------- */
+
+      const tokenHash =
+        sha256(authToken);
+
+      const uploader =
+        await UploaderToken.findOne({
+          tokenHash,
+          active: true
+        });
+
+      if (!uploader) {
+
+        return res
+          .status(401)
+          .json({
+            success: false,
+            message: 'Invalid uploader token'
+          });
+      }
+
+      if (
+        uploader.expiresAt &&
+        new Date(
+          uploader.expiresAt
+        ) < new Date()
       ) {
 
         return res
           .status(401)
           .json({
-
-            success:
-              false,
-
-            message:
-              'Invalid login'
-
+            success: false,
+            message: 'Uploader token expired'
           });
       }
 
-      const token =
-        sign({
+      const jwtToken =
+        jwt.sign(
+          {
+            scope:
+              uploader.scope ||
+              'batches',
 
-          _id:
-            user._id,
-
-          username:
-            user.username,
-
-          role:
-            user.role,
-
-          scope:
-            'all',
-
-          batchIds:
-            []
-
-        });
+            batchIds:
+              uploader.batchIds ||
+              []
+          },
+          JWT_SECRET,
+          {
+            expiresIn: '7d'
+          }
+        );
 
       return res.json({
-
-        success:
-          true,
-
-        token,
-
-        role:
-          user.role,
-
+        success: true,
+        token: jwtToken,
         scope:
-          'all'
+          uploader.scope ||
+          'batches',
 
+        batchIds:
+          uploader.batchIds ||
+          []
       });
 
     } catch (e) {
@@ -1938,16 +638,8 @@ app.post(
       return res
         .status(500)
         .json({
-
-          success:
-            false,
-
-          message:
-            'Login failed',
-
-          detail:
-            e.message
-
+          success: false,
+          message: 'Login failed'
         });
     }
   }
@@ -1955,125 +647,59 @@ app.post(
 
 
 /* =========================================================
-   PUBLIC
+   JWT MIDDLEWARE
 ========================================================= */
 
-app.get(
-  '/api/public/batches',
-  async (req, res) => {
+function jwtMiddleware(
+  req,
+  res,
+  next
+) {
 
-    try {
+  try {
 
-      const batches =
-        await Batch.find({
-          active:
-            true
-        })
-          .sort({
-            category:
-              1,
+    const header =
+      req.headers.authorization ||
+      '';
 
-            name:
-              1
-          });
-
-      res.set(
-        'Cache-Control',
-        'no-store'
-      );
-
-      return res.json({
-
-        success:
-          true,
-
-        batches
-
-      });
-
-    } catch (e) {
-
-      console.error(e);
+    if (
+      !header.startsWith(
+        'Bearer '
+      )
+    ) {
 
       return res
-        .status(500)
+        .status(401)
         .json({
-
-          success:
-            false,
-
-          message:
-            'Failed to load batches'
-
+          success: false,
+          message: 'Authorization required'
         });
     }
-  }
-);
 
+    const token =
+      header.slice(7).trim();
 
-app.get(
-  '/api/public/batches/:id/:type',
-  async (req, res) => {
-
-    try {
-
-      const items =
-        await Test.find({
-
-          batchId:
-            req.params.id,
-
-          type:
-            contentType(
-              req.params.type
-            ),
-
-          published:
-            true
-
-        })
-          .sort({
-
-            startTime:
-              -1,
-
-            createdAt:
-              -1
-
-          });
-
-      res.set(
-        'Cache-Control',
-        'no-store'
+    const decoded =
+      jwt.verify(
+        token,
+        JWT_SECRET
       );
 
-      return res.json({
+    req.auth =
+      decoded;
 
-        success:
-          true,
+    return next();
 
-        items
+  } catch (e) {
 
+    return res
+      .status(401)
+      .json({
+        success: false,
+        message: 'Invalid or expired session'
       });
-
-    } catch (e) {
-
-      console.error(e);
-
-      return res
-        .status(500)
-        .json({
-
-          success:
-            false,
-
-          message:
-            'Failed to load content'
-
-        });
-    }
   }
-);
+}
 
 
 /* =========================================================
@@ -2082,531 +708,202 @@ app.get(
 
 app.get(
   '/api/admin/me',
-  auth,
+  jwtMiddleware,
   async (req, res) => {
 
     return res.json({
+      success: true,
+      scope:
+        req.auth.scope ||
+        'all',
 
-      success:
-        true,
-
-      user: {
-
-        sub:
-          req.user.sub,
-
-        username:
-          req.user.username,
-
-        role:
-          req.user.role,
-
-        scope:
-          req.user.scope ||
-          'all',
-
-        batchIds:
-          req.user.batchIds ||
-          [],
-
-        batchCount:
-          req.sourceSession
-            ?.sourceBatchIds
-            ?.size ||
-          undefined
-
-      }
-
+      batchIds:
+        req.auth.batchIds ||
+        []
     });
   }
 );
 
 
 /* =========================================================
-   SOURCE BATCHES
+   ADMIN STATS
 ========================================================= */
 
 app.get(
-  '/api/admin/source/batches',
-  auth,
+  '/api/admin/stats',
+  jwtMiddleware,
   async (req, res) => {
 
     try {
 
-      const usedToken =
-        ppTokenOf(req);
+      const [
+        batches,
+        tests,
+        dpps
+      ] = await Promise.all([
 
-      if (usedToken) {
+        Batch.countDocuments({
+          active: true
+        }),
 
-        const fetched =
-          await fetchAllSourceBatches(
-            usedToken,
-            req.sourceSession.basePath
-          );
+        Test.countDocuments({
+          type: 'test'
+        }),
 
-        const allowed =
-          sourceBatchSet(req);
+        Test.countDocuments({
+          type: 'dpp'
+        })
 
-        const batches =
-          fetched.batches.filter(
-            batch =>
-              allowed?.has(
-                getSourceBatchId(
-                  batch
-                )
-              )
-          );
-
-        res.set(
-          'Cache-Control',
-          'no-store'
-        );
-
-        return res.json({
-
-          success:
-            true,
-
-          data:
-            fetched.data,
-
-          batches
-
-        });
-      }
-
-      const fetched =
-        await fetchAllSourceBatches(
-          PENPENCIL_API_TOKEN,
-          PENPENCIL_BATCHES_PATH
-        );
-
-      let batches =
-        fetched.batches;
-
-      if (
-        req.user.scope !== 'all'
-      ) {
-
-        const allowed =
-          new Set(
-            await getAllowedSourceBatchIds(
-              req
-            )
-          );
-
-        batches =
-          batches.filter(
-            batch =>
-              allowed.has(
-                getSourceBatchId(
-                  batch
-                )
-              )
-          );
-      }
-
-      res.set(
-        'Cache-Control',
-        'no-store'
-      );
+      ]);
 
       return res.json({
+        success: true,
+        stats: {
+          batches,
+          tests,
+          dpps
+        }
+      });
 
-        success:
-          true,
+    } catch (e) {
 
-        data:
-          fetched.data,
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message: 'Failed to load stats'
+        });
+    }
+  }
+);
 
-        batches
 
+/* =========================================================
+   ADMIN BATCHES
+========================================================= */
+
+app.get(
+  '/api/admin/batches',
+  jwtMiddleware,
+  async (req, res) => {
+
+    try {
+
+      let filter = {
+        active: true
+      };
+
+      if (
+        req.auth.scope !== 'all'
+      ) {
+
+        filter._id = {
+          $in:
+            req.auth.batchIds || []
+        };
+      }
+
+      const batches =
+        await Batch.find(filter)
+          .sort({
+            category: 1,
+            name: 1
+          })
+          .lean();
+
+      return res.json({
+        success: true,
+        items: batches
+      });
+
+    } catch (e) {
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message: 'Failed to load batches'
+        });
+    }
+  }
+);
+
+
+/* =========================================================
+   ADMIN SOURCE BATCHES
+========================================================= */
+
+app.get(
+  '/api/admin/source/batches',
+  jwtMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const data =
+        await sourceFetch(
+          '/v1/users/batches?page=1&limit=50'
+        );
+
+      const items =
+        extractList(data);
+
+      return res.json({
+        success: true,
+        items
       });
 
     } catch (e) {
 
       console.error(
-        'PenPencil batches error:',
-        e.message
-      );
-
-      return sourceError(
-        res,
-        e,
-        {
-          batches:
-            []
-        }
-      );
-    }
-  }
-);
-
-
-/* =========================================================
-   SOURCE BATCH DETAILS
-========================================================= */
-
-app.get(
-  '/api/admin/source/batches/:batchId/details',
-  auth,
-  async (req, res) => {
-
-    try {
-
-      const id =
-        String(
-          req.params.batchId
-        );
-
-      if (
-        !(await canAccessSourceBatch(
-          req,
-          id
-        ))
-      ) {
-
-        return res
-          .status(403)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'You do not have access to this source batch'
-
-          });
-      }
-
-      const data =
-        await penpencilRequest(
-
-          buildSourcePath(
-            PENPENCIL_BATCH_DETAILS_PATH,
-            {
-              batchId:
-                id
-            }
-          ),
-
-          ppTokenOf(req)
-
-        );
-
-      res.set(
-        'Cache-Control',
-        'no-store'
-      );
-
-      return res.json({
-
-        success:
-          true,
-
-        data
-
-      });
-
-    } catch (e) {
-
-      console.error(e);
-
-      return sourceError(
-        res,
+        'Source batches error:',
         e
       );
+
+      return res
+        .status(
+          e.status || 500
+        )
+        .json({
+          success: false,
+          message:
+            e.message ||
+            'Failed to load source batches',
+
+          items: []
+        });
     }
   }
 );
 
 
 /* =========================================================
-   RESOLVE SOURCE BATCH ID
-========================================================= */
-
-async function resolveSourceBatchId(
-  id
-) {
-
-  const raw =
-    String(id || '');
-
-  if (!raw) {
-    return '';
-  }
-
-  const direct =
-    await Batch.findOne({
-
-      sourceBatchId:
-        raw,
-
-      active:
-        true
-
-    })
-      .select(
-        'sourceBatchId'
-      )
-      .lean();
-
-  if (
-    direct?.sourceBatchId
-  ) {
-
-    return String(
-      direct.sourceBatchId
-    );
-  }
-
-  if (
-    mongoose.Types.ObjectId.isValid(
-      raw
-    )
-  ) {
-
-    const local =
-      await Batch.findById(
-        raw
-      )
-        .select(
-          'sourceBatchId active'
-        )
-        .lean();
-
-    if (
-      local?.active &&
-      local.sourceBatchId
-    ) {
-
-      return String(
-        local.sourceBatchId
-      );
-    }
-  }
-
-  return raw;
-}
-
-
-/* =========================================================
-   TEST API FALLBACK
-========================================================= */
-
-async function fetchSourceTests(
-  batchId,
-  token,
-  categoryId,
-  categorySectionId
-) {
-
-  const paths = [];
-
-  paths.push(
-    buildSourcePath(
-      PENPENCIL_TESTS_PATH,
-      {
-        batchId,
-        categoryId,
-        categorySectionId
-      }
-    )
-  );
-
-  paths.push(
-    `/v3/test-service/tests?` +
-    `testType=All` +
-    `&testStatus=All` +
-    `&attemptStatus=All` +
-    `&batchId=${encodeURIComponent(batchId)}` +
-    `&isSubjective=false` +
-    `&isPurchased=true`
-  );
-
-  paths.push(
-    `/v3/test-service/tests?` +
-    `batchId=${encodeURIComponent(batchId)}` +
-    `&isSubjective=false`
-  );
-
-  let lastData = null;
-  let lastError = null;
-
-  for (
-    let i = 0;
-    i < paths.length;
-    i++
-  ) {
-
-    const requestPath =
-      paths[i];
-
-    try {
-
-      console.log(
-        `PenPencil tests attempt ${i + 1}:`,
-        requestPath
-      );
-
-      const data =
-        await penpencilRequest(
-          requestPath,
-          token
-        );
-
-      const items =
-        sourceArray(data);
-
-      console.log(
-        `PenPencil tests attempt ${i + 1} returned:`,
-        items.length
-      );
-
-      lastData =
-        data;
-
-      if (
-        items.length > 0
-      ) {
-
-        return {
-
-          data,
-
-          items,
-
-          usedPath:
-            requestPath
-
-        };
-      }
-
-    } catch (e) {
-
-      lastError =
-        e;
-
-      console.warn(
-        `PenPencil tests attempt ${i + 1} failed:`,
-        e.message
-      );
-
-      if (
-        e.upstreamStatus === 401 ||
-        e.upstreamStatus === 403 ||
-        e.upstreamStatus === 429
-      ) {
-
-        throw e;
-      }
-    }
-  }
-
-  return {
-
-    data:
-      lastData || {},
-
-    items:
-      [],
-
-    usedPath:
-      null,
-
-    error:
-      lastError
-
-  };
-}
-
-
-/* =========================================================
-   SOURCE TESTS
+   SOURCE BATCH TESTS
 ========================================================= */
 
 app.get(
   '/api/admin/source/batches/:batchId/tests',
-  auth,
+  jwtMiddleware,
   async (req, res) => {
 
     try {
 
-      const id =
+      const sourceBatchId =
         await resolveSourceBatchId(
           req.params.batchId
         );
 
-      if (
-        !id ||
-        !(await canAccessSourceBatch(
-          req,
-          id
-        ))
-      ) {
-
-        return res
-          .status(403)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'You do not have access to this source batch',
-
-            items:
-              []
-
-          });
-      }
-
-      const categoryId =
-        String(
-          req.query.categoryId ||
-          PENPENCIL_CATEGORY_ID
+      const data =
+        await sourceFetch(
+          `/v1/batches/${sourceBatchId}/tests`
         );
 
-      const categorySectionId =
-        String(
-          req.query.categorySectionId ||
-          PENPENCIL_CATEGORY_SECTION_ID
-        );
-
-      const result =
-        await fetchSourceTests(
-          id,
-          ppTokenOf(req),
-          categoryId,
-          categorySectionId
-        );
-
-      console.log(
-        'FINAL tests returned:',
-        result.items.length,
-        'for batch:',
-        id
-      );
-
-      res.set(
-        'Cache-Control',
-        'no-store'
-      );
+      const items =
+        extractList(data);
 
       return res.json({
-
-        success:
-          true,
-
-        data:
-          result.data,
-
-        items:
-          result.items,
-
-        sourcePath:
-          result.usedPath
-
+        success: true,
+        items
       });
 
     } catch (e) {
@@ -2616,120 +913,71 @@ app.get(
         e
       );
 
-      return sourceError(
-        res,
-        e,
-        {
-          items:
-            []
-        }
-      );
+      return res
+        .status(
+          e.status || 500
+        )
+        .json({
+          success: false,
+          message:
+            e.message ||
+            'Failed to load tests',
+
+          items: []
+        });
     }
   }
 );
 
 
 /* =========================================================
-   SOURCE DPP
+   SOURCE BATCH DPPs
 ========================================================= */
 
 app.get(
   '/api/admin/source/batches/:batchId/dpps',
-  auth,
+  jwtMiddleware,
   async (req, res) => {
 
     try {
 
-      const id =
+      const sourceBatchId =
         await resolveSourceBatchId(
           req.params.batchId
         );
 
-      if (
-        !id ||
-        !(await canAccessSourceBatch(
-          req,
-          id
-        ))
-      ) {
-
-        return res
-          .status(403)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'You do not have access to this source batch',
-
-            items:
-              []
-
-          });
-      }
-
-      const requestPath =
-        buildSourcePath(
-          PENPENCIL_DPPS_PATH,
-          {
-            batchId:
-              id
-          }
-        );
-
-      console.log(
-        'PenPencil DPP request:',
-        requestPath
-      );
-
       const data =
-        await penpencilRequest(
-          requestPath,
-          ppTokenOf(req)
+        await sourceFetch(
+          `/v1/batches/${sourceBatchId}/dpps`
         );
 
       const items =
-        sourceArray(data);
-
-      console.log(
-        'PenPencil DPPs returned:',
-        items.length,
-        'for batch:',
-        id
-      );
-
-      res.set(
-        'Cache-Control',
-        'no-store'
-      );
+        extractList(data);
 
       return res.json({
-
-        success:
-          true,
-
-        data,
-
+        success: true,
         items
-
       });
 
     } catch (e) {
 
       console.error(
-        'Source DPPs error:',
+        'Source DPP error:',
         e
       );
 
-      return sourceError(
-        res,
-        e,
-        {
-          items:
-            []
-        }
-      );
+      return res
+        .status(
+          e.status || 500
+        )
+        .json({
+          success: false,
+          message:
+            e.message ||
+            'Failed to load DPPs',
+
+          items: []
+        });
     }
   }
 );
@@ -2741,248 +989,67 @@ app.get(
 
 app.get(
   '/api/admin/source/tests/:testId',
-  auth,
+  jwtMiddleware,
   async (req, res) => {
 
     try {
 
-      const batchId =
-        req.query.batchId
-          ? await resolveSourceBatchId(
-              req.query.batchId
-            )
-          : '';
+      const testId =
+        String(
+          req.params.testId
+        ).trim();
 
-      if (
-        batchId &&
-        !(await canAccessSourceBatch(
-          req,
-          batchId
-        ))
-      ) {
+      let data;
 
-        return res
-          .status(403)
-          .json({
+      try {
 
-            success:
-              false,
+        data =
+          await sourceFetch(
+            `/v3/tests/${testId}`
+          );
 
-            message:
-              'You do not have access to this source batch'
+      } catch (e) {
 
-          });
+        data =
+          await sourceFetch(
+            `/v1/tests/${testId}`
+          );
       }
 
-      const requestPath =
-        buildSourcePath(
-          PENPENCIL_TEST_DETAIL_PATH,
-          {
-            testId:
-              req.params.testId
-          }
-        );
-
-      console.log(
-        'PenPencil test detail:',
-        requestPath
-      );
-
-      const data =
-        await penpencilRequest(
-          requestPath,
-          ppTokenOf(req)
-        );
-
-      res.set(
-        'Cache-Control',
-        'no-store'
-      );
-
       return res.json({
-
-        success:
-          true,
-
+        success: true,
         data
-
-      });
-
-    } catch (e) {
-
-      console.error(e);
-
-      return sourceError(
-        res,
-        e
-      );
-    }
-  }
-);
-
-
-/* =========================================================
-   SOURCE UPLOAD STATUS
-========================================================= */
-
-app.get(
-  '/api/admin/source/batches/:batchId/:type/status',
-  auth,
-  async (req, res) => {
-
-    try {
-
-      const sourceBatchId =
-        await resolveSourceBatchId(
-          req.params.batchId
-        );
-
-      const type =
-        contentType(
-          req.params.type
-        );
-
-      if (
-        !sourceBatchId ||
-        !(await canAccessSourceBatch(
-          req,
-          sourceBatchId
-        ))
-      ) {
-
-        return res
-          .status(403)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'You do not have access to this source batch',
-
-            uploadedIds:
-              [],
-
-            uploadedTitles:
-              []
-
-          });
-      }
-
-      const localBatch =
-        await Batch.findOne({
-
-          sourceBatchId,
-
-          active:
-            true
-
-        })
-          .select('_id')
-          .lean();
-
-      if (!localBatch) {
-
-        return res.json({
-
-          success:
-            true,
-
-          uploadedIds:
-            [],
-
-          uploadedTitles:
-            []
-
-        });
-      }
-
-      const uploaded =
-        await Test.find({
-
-          batchId:
-            localBatch._id,
-
-          type
-
-        })
-          .select(
-            'sourceTestId title'
-          )
-          .lean();
-
-      const uploadedIds =
-        uploaded
-          .map(
-            item =>
-              item.sourceTestId
-                ? String(
-                    item.sourceTestId
-                  )
-                : ''
-          )
-          .filter(Boolean);
-
-      const uploadedTitles =
-        uploaded
-          .map(
-            item =>
-              String(
-                item.title || ''
-              )
-                .trim()
-                .toLowerCase()
-          )
-          .filter(Boolean);
-
-      res.set(
-        'Cache-Control',
-        'no-store'
-      );
-
-      return res.json({
-
-        success:
-          true,
-
-        uploadedIds,
-
-        uploadedTitles
-
       });
 
     } catch (e) {
 
       console.error(
-        'Source upload status error:',
+        'Source test detail error:',
         e
       );
 
-      return sourceError(
-        res,
-        e,
-        {
-
-          uploadedIds:
-            [],
-
-          uploadedTitles:
-            []
-
-        }
-      );
+      return res
+        .status(
+          e.status || 500
+        )
+        .json({
+          success: false,
+          message:
+            e.message ||
+            'Failed to load test'
+        });
     }
   }
 );
 
 
 /* =========================================================
-   SOURCE UPLOAD
+   SOURCE CONTENT STATUS
 ========================================================= */
 
-app.post(
-  '/api/admin/source/batches/:batchId/:type/upload',
-  auth,
+app.get(
+  '/api/admin/source/batches/:batchId/:type/status',
+  jwtMiddleware,
   async (req, res) => {
 
     try {
@@ -2993,19 +1060,113 @@ app.post(
         );
 
       const type =
-        contentType(
+        normalizeType(
           req.params.type
         );
 
+      const items =
+        await Test.find({
+          sourceBatchId,
+          type
+        })
+          .select(
+            'sourceTestId sourceBatchId title published'
+          )
+          .lean();
+
+      return res.json({
+        success: true,
+        items
+      });
+
+    } catch (e) {
+
+      console.error(
+        'Status error:',
+        e
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            'Failed to load upload status',
+
+          items: []
+        });
+    }
+  }
+);
+
+
+/* =========================================================
+   SOURCE CONTENT UPLOAD
+========================================================= */
+
+app.post(
+  '/api/admin/source/batches/:batchId/:type/upload',
+  jwtMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const rawBatchId =
+        String(
+          req.params.batchId
+        ).trim();
+
+      const type =
+        normalizeType(
+          req.params.type
+        );
+
+      /* ---------------------------------------------------
+         Resolve source batch
+      --------------------------------------------------- */
+
+      const sourceBatchId =
+        await resolveSourceBatchId(
+          rawBatchId
+        );
+
+      /* ---------------------------------------------------
+         Find local batch
+      --------------------------------------------------- */
+
+      const localBatch =
+        await Batch.findOne({
+          sourceBatchId,
+          active: true
+        });
+
+      if (!localBatch) {
+
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              'Local batch not found. Create/import the batch first.'
+          });
+      }
+
+      /* ---------------------------------------------------
+         Source item
+      --------------------------------------------------- */
+
+      const sourceItem =
+        req.body.sourceItem ||
+        req.body.item ||
+        req.body;
+
       const sourceTestId =
         String(
-
-          req.body?.sourceTestId ||
-
-          req.body?.sourceId ||
-
+          sourceItem._id ||
+          sourceItem.id ||
+          sourceItem.testId ||
+          sourceItem.sourceTestId ||
           ''
-
         ).trim();
 
       if (!sourceTestId) {
@@ -3013,1077 +1174,149 @@ app.post(
         return res
           .status(400)
           .json({
-
-            success:
-              false,
-
+            success: false,
             message:
-              'Source test ID is required'
-
+              'Source test/DPP ID missing'
           });
       }
 
-      if (
-        !sourceBatchId ||
-        !(await canAccessSourceBatch(
-          req,
-          sourceBatchId
-        ))
-      ) {
+      /* ---------------------------------------------------
+         Already uploaded?
+      --------------------------------------------------- */
 
-        return res
-          .status(403)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'You do not have access to this source batch'
-
-          });
-      }
-
-
-      /* -----------------------------------------
-         FIND LOCAL BATCH
-      ----------------------------------------- */
-
-      const localBatch =
-        await Batch.findOne({
-
-          sourceBatchId,
-
-          active:
-            true
-
-        });
-
-      if (!localBatch) {
-
-        return res
-          .status(404)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'Local batch not found for this source batch'
-
-          });
-      }
-
-
-      /* -----------------------------------------
-         DUPLICATE CHECK
-      ----------------------------------------- */
-
-      const alreadyUploaded =
+      const existing =
         await Test.findOne({
-
-          batchId:
-            localBatch._id,
-
-          type,
-
-          sourceTestId
-
+          sourceTestId,
+          sourceBatchId,
+          type
         });
 
-      if (alreadyUploaded) {
+      if (existing) {
 
         return res.json({
-
-          success:
-            true,
-
-          skipped:
-            true,
-
-          message:
-            'Already uploaded',
-
-          item:
-            alreadyUploaded
-
+          success: true,
+          skipped: true,
+          message: 'Already uploaded',
+          item: existing
         });
       }
 
+      /* ---------------------------------------------------
+         Try fetching detail
+      --------------------------------------------------- */
 
-      /* -----------------------------------------
-         FETCH SOURCE DETAIL
-      ----------------------------------------- */
+      let detail =
+        sourceItem;
 
-      let sourceData =
-        null;
-
-      try {
-
-        const detailPath =
-          buildSourcePath(
-            PENPENCIL_TEST_DETAIL_PATH,
-            {
-              testId:
-                sourceTestId
-            }
-          );
-
-        console.log(
-          'Source upload detail:',
-          detailPath
-        );
-
-        sourceData =
-          await penpencilRequest(
-            detailPath,
-            ppTokenOf(req)
-          );
-
-      } catch (detailError) {
-
-        /*
-           DPP me agar detail API available
-           nahi hai to frontend ka sourceItem
-           fallback use hoga.
-        */
-
-        if (
-          type === 'dpp' &&
-          req.body?.sourceItem
-        ) {
-
-          console.warn(
-            'DPP detail failed, using sourceItem fallback:',
-            detailError.message
-          );
-
-          sourceData =
-            req.body.sourceItem;
-
-        } else {
-
-          throw detailError;
-        }
-      }
-
-
-      /* -----------------------------------------
-         NORMALIZE SOURCE RESPONSE
-      ----------------------------------------- */
-
-      let source =
-        sourceData;
-
-      if (
-        sourceData?.data &&
-        typeof sourceData.data === 'object' &&
-        !Array.isArray(
-          sourceData.data
-        )
-      ) {
-
-        source =
-          sourceData.data;
-      }
-
-      if (
-        source?.data &&
-        typeof source.data === 'object' &&
-        !Array.isArray(
-          source.data
-        )
-      ) {
-
-        source =
-          source.data;
-      }
-
-      if (
-        source?.test &&
-        typeof source.test === 'object' &&
-        !Array.isArray(
-          source.test
-        )
-      ) {
-
-        source =
-          source.test;
-      }
-
-
-      /* -----------------------------------------
-         TITLE
-      ----------------------------------------- */
-
-      const title =
-        String(
-
-          source?.title ||
-
-          source?.name ||
-
-          source?.testName ||
-
-          source?.test_title ||
-
-          req.body?.title ||
-
-          'Untitled Test'
-
-        ).trim();
-
-
-      /* -----------------------------------------
-         INSTRUCTIONS
-      ----------------------------------------- */
-
-      const instructions =
-        source?.instructions ||
-
-        source?.instruction ||
-
-        source?.description ||
-
-        req.body?.instructions ||
-
-        '';
-
-
-      /* -----------------------------------------
-         START TIME
-      ----------------------------------------- */
-
-      const rawStartTime =
-
-        source?.startTime ||
-
-        source?.start_time ||
-
-        source?.startDate ||
-
-        source?.start_date ||
-
-        source?.scheduledAt ||
-
-        source?.scheduleTime ||
-
-        req.body?.startTime ||
-
-        null;
-
-      const startTime =
-        safeDate(
-          rawStartTime
-        );
-
-
-      /* -----------------------------------------
-         QUESTIONS
-      ----------------------------------------- */
-
-      let questions = [];
-
-      const possibleQuestionArrays = [
-
-        source?.questions,
-
-        source?.questionList,
-
-        source?.question_list,
-
-        source?.question,
-
-        source?.data?.questions,
-
-        source?.test?.questions,
-
-        source?.result?.questions,
-
-        source?.items
-
-      ];
-
-      for (
-        const candidate
-        of possibleQuestionArrays
-      ) {
-
-        if (
-          Array.isArray(
-            candidate
-          )
-        ) {
-
-          questions =
-            candidate;
-
-          break;
-        }
-      }
-
-
-      /*
-         Direct array response.
-      */
-
-      if (
-        !questions.length &&
-        Array.isArray(source)
-      ) {
-
-        questions =
-          source;
-      }
-
-
-      /*
-         Agar sourceData me direct
-         data array hai.
-      */
-
-      if (
-        !questions.length &&
-        Array.isArray(
-          sourceData?.data
-        )
-      ) {
-
-        questions =
-          sourceData.data;
-      }
-
-
-      /* -----------------------------------------
-         CREATE LOCAL TEST
-      ----------------------------------------- */
-
-      const item =
-        await Test.create({
-
-          batchId:
-            localBatch._id,
-
-          type,
-
-          sourceTestId,
-
-          sourceBatchId,
-
-          title,
-
-          instructions,
-
-          startTime,
-
-          questions,
-
-          totalQuestions:
-            questions.length,
-
-          published:
-            true,
-
-          uploadedAt:
-            new Date(),
-
-          updatedAt:
-            new Date()
-
-        });
-
-
-      console.log(
-        'SOURCE UPLOADED:',
-        {
-
-          sourceBatchId,
-
-          sourceTestId,
-
-          type,
-
-          title,
-
-          questions:
-            questions.length
-
-        }
-      );
-
-
-      return res.json({
-
-        success:
-          true,
-
-        skipped:
-          false,
-
-        message:
-          'Uploaded successfully',
-
-        item
-
-      });
-
-    } catch (e) {
-
-      console.error(
-        'Source upload error:',
-        e
-      );
-
-
-      /*
-         Race-condition duplicate handling.
-      */
-
-      if (
-        e?.code === 11000
-      ) {
+      if (type === 'test') {
 
         try {
 
-          const sourceBatchId =
-            await resolveSourceBatchId(
-              req.params.batchId
-            );
+          let result;
 
-          const existingBatch =
-            await Batch.findOne({
+          try {
 
-              sourceBatchId,
+            result =
+              await sourceFetch(
+                `/v3/tests/${sourceTestId}`
+              );
 
-              active:
-                true
+          } catch {
 
-            });
-
-          if (existingBatch) {
-
-            const existing =
-              await Test.findOne({
-
-                batchId:
-                  existingBatch._id,
-
-                type:
-                  contentType(
-                    req.params.type
-                  ),
-
-                sourceTestId:
-                  String(
-                    req.body?.sourceTestId ||
-                    ''
-                  )
-
-              });
-
-            if (existing) {
-
-              return res.json({
-
-                success:
-                  true,
-
-                skipped:
-                  true,
-
-                message:
-                  'Already uploaded',
-
-                item:
-                  existing
-
-              });
-            }
+            result =
+              await sourceFetch(
+                `/v1/tests/${sourceTestId}`
+              );
           }
 
-        } catch {}
-      }
-
-
-      return sourceError(
-        res,
-        e
-      );
-    }
-  }
-);
-
-
-/* =========================================================
-   LOCAL BATCHES
-========================================================= */
-
-app.get(
-  '/api/admin/batches',
-  auth,
-  async (req, res) => {
-
-    try {
-
-      if (
-        req.sourceSession
-      ) {
-
-        const ids =
-          [
-            ...req.sourceSession
-              .sourceBatchIds
-          ];
-
-        const batches =
-          await Batch.find({
-
-            sourceBatchId: {
-              $in:
-                ids
-            },
-
-            active:
-              true
-
-          })
-            .sort({
-              name:
-                1
-            });
-
-        res.set(
-          'Cache-Control',
-          'no-store'
-        );
-
-        return res.json({
-
-          success:
-            true,
-
-          batches
-
-        });
-      }
-
-      const batches =
-        req.user.scope === 'all'
-
-          ? await Batch.find()
-              .sort({
-                createdAt:
-                  -1
-              })
-
-          : await Batch.find({
-
-              _id: {
-                $in:
-                  await getAllowedBatchIds(
-                    req
-                  )
-              }
-
-            })
-              .sort({
-                createdAt:
-                  -1
-              });
-
-      res.set(
-        'Cache-Control',
-        'no-store'
-      );
-
-      return res.json({
-
-        success:
-          true,
-
-        batches
-
-      });
-
-    } catch (e) {
-
-      console.error(e);
-
-      return res
-        .status(500)
-        .json({
-
-          success:
-            false,
-
-          message:
-            'Failed to load batches'
-
-        });
-    }
-  }
-);
-
-
-/* =========================================================
-   CREATE LOCAL BATCH
-========================================================= */
-
-app.post(
-  '/api/admin/batches',
-  auth,
-  masterOnly,
-  async (req, res) => {
-
-    try {
-
-      const batch =
-        await Batch.create({
-
-          name:
-            req.body.name,
-
-          category:
-            req.body.category ||
-            'Other Batch Tests',
-
-          subgroup:
-            req.body.subgroup ||
-            '',
-
-          exam:
-            req.body.exam ||
-            '',
-
-          language:
-            req.body.language ||
-            'Hindi',
-
-          status:
-            req.body.status ||
-            'Paid',
-
-          active:
-            req.body.active !== false,
-
-          sourceBatchId:
-            req.body.sourceBatchId ||
-            undefined
-
-        });
-
-      return res.json({
-
-        success:
-          true,
-
-        batch
-
-      });
-
-    } catch (e) {
-
-      console.error(e);
-
-      return res
-        .status(400)
-        .json({
-
-          success:
-            false,
-
-          message:
-            e.message
-
-        });
-    }
-  }
-);
-
-
-/* =========================================================
-   UPDATE BATCH
-========================================================= */
-
-app.put(
-  '/api/admin/batches/:id',
-  auth,
-  masterOnly,
-  async (req, res) => {
-
-    try {
-
-      const batch =
-        await Batch.findByIdAndUpdate(
-
-          req.params.id,
-
-          {
-
-            ...req.body,
-
-            updatedAt:
-              new Date()
-
-          },
-
-          {
-            new:
-              true
+          if (result) {
+
+            detail =
+              result.data ||
+              result.item ||
+              result;
           }
 
-        );
+        } catch (e) {
 
-      if (!batch) {
-
-        return res
-          .status(404)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'Batch not found'
-
-          });
-      }
-
-      return res.json({
-
-        success:
-          true,
-
-        batch
-
-      });
-
-    } catch {
-
-      return res
-        .status(400)
-        .json({
-
-          success:
-            false,
-
-          message:
-            'Update failed'
-
-        });
-    }
-  }
-);
-
-
-/* =========================================================
-   DELETE BATCH
-========================================================= */
-
-app.delete(
-  '/api/admin/batches/:id',
-  auth,
-  masterOnly,
-  async (req, res) => {
-
-    try {
-
-      await Test.deleteMany({
-        batchId:
-          req.params.id
-      });
-
-      await Batch.findByIdAndDelete(
-        req.params.id
-      );
-
-      return res.json({
-        success:
-          true
-      });
-
-    } catch {
-
-      return res
-        .status(400)
-        .json({
-
-          success:
-            false,
-
-          message:
-            'Delete failed'
-
-        });
-    }
-  }
-);
-
-
-/* =========================================================
-   LOCAL CONTENT
-========================================================= */
-
-app.get(
-  '/api/admin/batches/:id/content/:type',
-  auth,
-  async (req, res) => {
-
-    try {
-
-      if (
-        !canAccessBatch(
-          req,
-          req.params.id
-        )
-      ) {
-
-        return res
-          .status(403)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'You do not have access to this batch'
-
-          });
-      }
-
-      const items =
-        await Test.find({
-
-          batchId:
-            req.params.id,
-
-          type:
-            contentType(
-              req.params.type
-            )
-
-        })
-          .sort({
-
-            startTime:
-              -1,
-
-            createdAt:
-              -1
-
-          });
-
-      res.set(
-        'Cache-Control',
-        'no-store'
-      );
-
-      return res.json({
-
-        success:
-          true,
-
-        items
-
-      });
-
-    } catch (e) {
-
-      console.error(e);
-
-      return res
-        .status(500)
-        .json({
-
-          success:
-            false,
-
-          message:
-            'Failed to load content'
-
-        });
-    }
-  }
-);
-
-
-/* =========================================================
-   CREATE LOCAL SOURCE BATCH
-========================================================= */
-
-app.post(
-  '/api/admin/source/batches/:sourceBatchId/local',
-  auth,
-  masterOnly,
-  async (req, res) => {
-
-    try {
-
-      const sourceBatchId =
-        String(
-          req.params.sourceBatchId
-        );
-
-      let batch =
-        await Batch.findOne({
-          sourceBatchId
-        });
-
-      if (!batch) {
-
-        batch =
-          await Batch.create({
-
-            name:
-              String(
-                req.body.name ||
-                'Source Batch'
-              ).trim(),
-
-            category:
-              req.body.category ||
-              'Other Batch Tests',
-
-            subgroup:
-              req.body.subgroup ||
-              '',
-
-            exam:
-              req.body.exam ||
-              '',
-
-            language:
-              req.body.language ||
-              'Hindi',
-
-            status:
-              req.body.status ||
-              'Paid',
-
-            active:
-              true,
-
-            sourceBatchId
-
-          });
-      }
-
-      return res.json({
-
-        success:
-          true,
-
-        batch
-
-      });
-
-    } catch (e) {
-
-      console.error(e);
-
-      return res
-        .status(400)
-        .json({
-
-          success:
-            false,
-
-          message:
+          console.log(
+            'Test detail fetch failed, using source item:',
             e.message
-
-        });
-    }
-  }
-);
-
-
-/* =========================================================
-   NORMAL LOCAL UPLOAD
-========================================================= */
-
-app.post(
-  '/api/admin/batches/:id/content/:type',
-  auth,
-  async (req, res) => {
-
-    try {
-
-      if (
-        !canAccessBatch(
-          req,
-          req.params.id
-        )
-      ) {
-
-        return res
-          .status(403)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'You do not have access to this batch'
-
-          });
+          );
+        }
       }
+
+      /* ---------------------------------------------------
+         Extract fields
+      --------------------------------------------------- */
+
+      const title =
+        detail.title ||
+        detail.name ||
+        sourceItem.title ||
+        sourceItem.name ||
+        'Untitled';
+
+      const instructions =
+        detail.instructions ||
+        detail.description ||
+        sourceItem.instructions ||
+        sourceItem.description ||
+        '';
+
+      const startTime =
+        detail.startTime ||
+        detail.start_date ||
+        sourceItem.startTime ||
+        sourceItem.start_date ||
+        null;
 
       const questions =
-        Array.isArray(
-          req.body.questions
-        )
-          ? req.body.questions
-          : [];
+        detail.questions ||
+        detail.questionList ||
+        sourceItem.questions ||
+        [];
 
-      const item =
+      /* ---------------------------------------------------
+         Create Test
+      --------------------------------------------------- */
+
+      const created =
         await Test.create({
 
           batchId:
-            req.params.id,
+            localBatch._id,
 
-          type:
-            contentType(
-              req.params.type
-            ),
+          type,
 
-          title:
-            String(
-              req.body.title ||
-              'Untitled'
-            ).trim(),
+          title,
 
-          instructions:
-            req.body.instructions ||
-            '',
+          startTime,
 
-          startTime:
-            safeDate(
-              req.body.startTime
-            ),
+          instructions,
 
           questions,
 
           totalQuestions:
-            questions.length,
+            Number(
+              detail.totalQuestions ||
+              sourceItem.totalQuestions ||
+              questions.length ||
+              0
+            ),
 
-          published:
-            req.body.published !== false,
+          published: true,
 
-          uploadedAt:
-            new Date(),
+          sourceTestId,
 
-          updatedAt:
-            new Date()
-
+          sourceBatchId
         });
 
       return res.json({
-
-        success:
-          true,
-
-        item
-
+        success: true,
+        skipped: false,
+        message: 'Uploaded successfully',
+        item: created
       });
 
     } catch (e) {
@@ -4094,15 +1327,14 @@ app.post(
       );
 
       return res
-        .status(400)
+        .status(
+          e.status || 500
+        )
         .json({
-
-          success:
-            false,
-
+          success: false,
           message:
-            e.message
-
+            e.message ||
+            'Upload failed'
         });
     }
   }
@@ -4110,406 +1342,283 @@ app.post(
 
 
 /* =========================================================
-   PUBLISH
+   PUBLIC BATCHES
 ========================================================= */
 
-async function setPublished(
-  req,
-  res,
-  value,
-  failMessage
-) {
-
-  try {
-
-    const item =
-      await Test.findById(
-        req.params.id
-      );
-
-    if (!item) {
-
-      return res
-        .status(404)
-        .json({
-
-          success:
-            false,
-
-          message:
-            'Content not found'
-
-        });
-    }
-
-    if (
-      !canAccessBatch(
-        req,
-        item.batchId
-      )
-    ) {
-
-      return res
-        .status(403)
-        .json({
-
-          success:
-            false,
-
-          message:
-            'Access denied'
-
-        });
-    }
-
-    item.published =
-      value;
-
-    item.updatedAt =
-      new Date();
-
-    await item.save();
-
-    return res.json({
-
-      success:
-        true,
-
-      item
-
-    });
-
-  } catch {
-
-    return res
-      .status(400)
-      .json({
-
-        success:
-          false,
-
-        message:
-          failMessage
-
-      });
-  }
-}
-
-
-app.post(
-  '/api/admin/content/:id/publish',
-  auth,
-  (req, res) =>
-    setPublished(
-      req,
-      res,
-      true,
-      'Publish failed'
-    )
-);
-
-
-app.post(
-  '/api/admin/content/:id/unpublish',
-  auth,
-  (req, res) =>
-    setPublished(
-      req,
-      res,
-      false,
-      'Unpublish failed'
-    )
-);
-
-
-/* =========================================================
-   DELETE CONTENT
-========================================================= */
-
-app.delete(
-  '/api/admin/content/:id',
-  auth,
+app.get(
+  '/api/public/batches',
   async (req, res) => {
 
     try {
 
-      const item =
-        await Test.findById(
+      const batches =
+        await Batch.find({
+          active: true
+        })
+          .sort({
+            category: 1,
+            name: 1
+          })
+          .lean();
+
+      res.set(
+        'Cache-Control',
+        'no-store'
+      );
+
+      return res.json({
+        success: true,
+        items: batches
+      });
+
+    } catch (e) {
+
+      console.error(
+        'Public batches error:',
+        e
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            'Failed to load public batches',
+
+          items: []
+        });
+    }
+  }
+);
+
+
+/* =========================================================
+   PUBLIC TEST / DPP CONTENT
+   IMPORTANT FIX:
+   Accepts BOTH:
+   - local Mongo Batch._id
+   - sourceBatchId
+========================================================= */
+
+app.get(
+  '/api/public/batches/:id/:type',
+  async (req, res) => {
+
+    try {
+
+      const localBatchId =
+        await resolveLocalBatchId(
           req.params.id
         );
 
-      if (!item) {
+      if (!localBatchId) {
+
+        res.set(
+          'Cache-Control',
+          'no-store'
+        );
+
+        return res.json({
+          success: true,
+          items: []
+        });
+      }
+
+      const type =
+        normalizeType(
+          req.params.type
+        );
+
+      const items =
+        await Test.find({
+          batchId: localBatchId,
+          type,
+          published: true
+        })
+          .sort({
+            startTime: -1,
+            createdAt: -1
+          })
+          .lean();
+
+      res.set(
+        'Cache-Control',
+        'no-store'
+      );
+
+      return res.json({
+        success: true,
+        items
+      });
+
+    } catch (e) {
+
+      console.error(
+        'Public content error:',
+        e
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            'Failed to load content',
+
+          items: []
+        });
+    }
+  }
+);
+
+
+/* =========================================================
+   PUBLIC SINGLE TEST
+========================================================= */
+
+app.get(
+  '/api/public/tests/:testId',
+  async (req, res) => {
+
+    try {
+
+      const test =
+        await Test.findOne({
+          $or: [
+            {
+              _id:
+                safeObjectId(
+                  req.params.testId
+                )
+                  ? req.params.testId
+                  : null
+            },
+            {
+              sourceTestId:
+                req.params.testId
+            }
+          ],
+          published: true
+        }).lean();
+
+      if (!test) {
 
         return res
           .status(404)
           .json({
-
-            success:
-              false,
-
-            message:
-              'Content not found'
-
+            success: false,
+            message: 'Test not found'
           });
       }
 
+      return res.json({
+        success: true,
+        item: test
+      });
+
+    } catch (e) {
+
+      console.error(
+        'Public test error:',
+        e
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            'Failed to load test'
+        });
+    }
+  }
+);
+
+
+/* =========================================================
+   ADMIN UPLOADER TOKENS
+========================================================= */
+
+app.get(
+  '/api/admin/uploader-tokens',
+  jwtMiddleware,
+  async (req, res) => {
+
+    try {
+
       if (
-        !canAccessBatch(
-          req,
-          item.batchId
-        )
+        req.auth.scope !== 'all'
       ) {
 
         return res
           .status(403)
           .json({
-
-            success:
-              false,
-
-            message:
-              'Access denied'
-
+            success: false,
+            message: 'Admin access required'
           });
       }
 
-      await Test.findByIdAndDelete(
-        req.params.id
-      );
-
-      return res.json({
-        success:
-          true
-      });
-
-    } catch {
-
-      return res
-        .status(400)
-        .json({
-
-          success:
-            false,
-
-          message:
-            'Delete failed'
-
-        });
-    }
-  }
-);
-
-
-/* =========================================================
-   STATS
-========================================================= */
-
-app.get(
-  '/api/admin/stats',
-  auth,
-  async (req, res) => {
-
-    try {
-
-      const isMaster =
-        req.user.scope === 'all';
-
-      const allowedIds =
-        isMaster
-
-          ? null
-
-          : (
-              req.sourceSession
-
-                ? [
-                    ...req.sourceSession
-                      .localBatchIds
-                  ]
-
-                : await getAllowedBatchIds(
-                    req
-                  )
-            );
-
-      const batchFilter =
-        isMaster
-
-          ? {}
-
-          : {
-              batchId: {
-                $in:
-                  allowedIds
-              }
-            };
-
-      const batches =
-        isMaster
-
-          ? await Batch.countDocuments()
-
-          : await Batch.countDocuments({
-
-              _id: {
-                $in:
-                  allowedIds
-              }
-
-            });
-
-      const tests =
-        await Test.countDocuments({
-
-          ...batchFilter,
-
-          type:
-            'test'
-
-        });
-
-      const dpps =
-        await Test.countDocuments({
-
-          ...batchFilter,
-
-          type:
-            'dpp'
-
-        });
-
-      const published =
-        await Test.countDocuments({
-
-          ...batchFilter,
-
-          published:
-            true
-
-        });
-
-      return res.json({
-
-        success:
-          true,
-
-        batches,
-
-        tests,
-
-        dpps,
-
-        published
-
-      });
-
-    } catch (e) {
-
-      console.error(e);
-
-      return res
-        .status(500)
-        .json({
-
-          success:
-            false,
-
-          message:
-            'Failed to load stats'
-
-        });
-    }
-  }
-);
-
-
-/* =========================================================
-   UPLOADER TOKENS
-========================================================= */
-
-app.get(
-  '/api/admin/uploader-tokens',
-  auth,
-  masterOnly,
-  async (req, res) => {
-
-    try {
-
       const tokens =
-        await UploaderToken.find()
-          .populate(
-            'batchIds',
-            'name status category sourceBatchId'
+        await UploaderToken.find({})
+          .select(
+            '-tokenHash'
           )
           .sort({
-            createdAt:
-              -1
+            createdAt: -1
           })
           .lean();
 
       return res.json({
-
-        success:
-          true,
-
-        tokens:
-          tokens.map(
-            t => ({
-
-              id:
-                t._id,
-
-              name:
-                t.name,
-
-              active:
-                t.active,
-
-              createdAt:
-                t.createdAt,
-
-              batches:
-                t.batchIds ||
-                []
-
-            })
-          )
-
+        success: true,
+        items: tokens
       });
 
     } catch (e) {
 
-      console.error(e);
-
       return res
         .status(500)
         .json({
-
-          success:
-            false,
-
+          success: false,
           message:
             'Failed to load uploader tokens'
-
         });
     }
   }
 );
 
 
+/* =========================================================
+   CREATE UPLOADER TOKEN
+========================================================= */
+
 app.post(
   '/api/admin/uploader-tokens',
-  auth,
-  masterOnly,
+  jwtMiddleware,
   async (req, res) => {
 
     try {
 
-      const name =
-        String(
-          req.body.name ||
-          ''
-        ).trim();
+      if (
+        req.auth.scope !== 'all'
+      ) {
+
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: 'Admin access required'
+          });
+      }
+
+      const token =
+        makeToken();
+
+      const tokenHash =
+        sha256(token);
+
+      const scope =
+        req.body.scope ||
+        'batches';
 
       const batchIds =
         Array.isArray(
@@ -4518,166 +1627,131 @@ app.post(
           ? req.body.batchIds
           : [];
 
-      if (!name) {
-
-        return res
-          .status(400)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'Token name is required'
-
-          });
-      }
-
-      if (!batchIds.length) {
-
-        return res
-          .status(400)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'Select at least one batch'
-
-          });
-      }
-
-      const batches =
-        await Batch.find({
-
-          _id: {
-            $in:
-              batchIds
-          }
-
-        });
-
-      if (
-        batches.length !==
-        batchIds.length
-      ) {
-
-        return res
-          .status(400)
-          .json({
-
-            success:
-              false,
-
-            message:
-              'One or more batches are invalid'
-
-          });
-      }
-
-      const plainToken =
-        generateUploaderToken();
-
       const uploader =
         await UploaderToken.create({
 
-          name,
+          name:
+            req.body.name ||
+            'Uploader',
 
-          tokenHash:
-            hashToken(
-              plainToken
-            ),
+          tokenHash,
+
+          scope,
 
           batchIds,
 
-          active:
-            true
+          active: true,
 
+          expiresAt:
+            req.body.expiresAt ||
+            null
         });
 
       return res.json({
+        success: true,
 
-        success:
-          true,
+        token,
 
-        token:
-          plainToken,
-
-        uploader: {
-
-          id:
+        item: {
+          _id:
             uploader._id,
 
           name:
             uploader.name,
 
+          scope:
+            uploader.scope,
+
           batchIds:
             uploader.batchIds,
 
           active:
-            uploader.active
+            uploader.active,
 
+          expiresAt:
+            uploader.expiresAt
         }
-
       });
 
     } catch (e) {
 
-      console.error(e);
+      console.error(
+        'Create token error:',
+        e
+      );
 
       return res
-        .status(400)
+        .status(500)
         .json({
-
-          success:
-            false,
-
+          success: false,
           message:
-            e.message
-
+            'Failed to create uploader token'
         });
     }
   }
 );
 
 
-app.delete(
+/* =========================================================
+   DISABLE UPLOADER TOKEN
+========================================================= */
+
+app.patch(
   '/api/admin/uploader-tokens/:id',
-  auth,
-  masterOnly,
+  jwtMiddleware,
   async (req, res) => {
 
     try {
 
-      await UploaderToken.findByIdAndUpdate(
+      if (
+        req.auth.scope !== 'all'
+      ) {
 
-        req.params.id,
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: 'Admin access required'
+          });
+      }
 
-        {
-          active:
-            false
-        }
+      const updated =
+        await UploaderToken.findByIdAndUpdate(
+          req.params.id,
+          {
+            active:
+              req.body.active !== false
+          },
+          {
+            new: true
+          }
+        )
+          .select('-tokenHash');
 
-      );
+      if (!updated) {
+
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              'Uploader token not found'
+          });
+      }
 
       return res.json({
-        success:
-          true
+        success: true,
+        item: updated
       });
 
-    } catch {
+    } catch (e) {
 
       return res
-        .status(400)
+        .status(500)
         .json({
-
-          success:
-            false,
-
+          success: false,
           message:
-            'Failed to revoke token'
-
+            'Failed to update token'
         });
     }
   }
@@ -4685,83 +1759,64 @@ app.delete(
 
 
 /* =========================================================
-   DATABASE BOOT
+   ROOT
 ========================================================= */
 
-async function boot() {
+app.get(
+  '/',
+  (req, res) => {
 
-  if (
-    !process.env.MONGO_URI
-  ) {
-
-    console.warn(
-      'MONGO_URI is required for persistent data.'
-    );
-
-    return;
-  }
-
-  if (
-    mongoose.connection.readyState === 0
-  ) {
-
-    await mongoose.connect(
-      process.env.MONGO_URI
-    );
-  }
-
-  console.log(
-    'MongoDB connected'
-  );
-
-  const username =
-    process.env.ADMIN_USERNAME ||
-    'admin';
-
-  const password =
-    process.env.ADMIN_PASSWORD ||
-    'change-me';
-
-  const exists =
-    await User.findOne({
-      username
+    res.json({
+      success: true,
+      message:
+        'ZX backend running'
     });
-
-  if (!exists) {
-
-    await User.create({
-
-      username,
-
-      passwordHash:
-        await bcrypt.hash(
-          password,
-          10
-        ),
-
-      role:
-        'Batch Uploader'
-
-    });
-
-    console.log(
-      'Default admin user created'
-    );
   }
-}
-
-
-boot().catch(
-  e =>
-    console.error(
-      'DB boot error:',
-      e.message
-    )
 );
 
 
 /* =========================================================
-   START
+   404
+========================================================= */
+
+app.use(
+  (req, res) => {
+
+    res
+      .status(404)
+      .json({
+        success: false,
+        message: 'Route not found'
+      });
+  }
+);
+
+
+/* =========================================================
+   ERROR HANDLER
+========================================================= */
+
+app.use(
+  (err, req, res, next) => {
+
+    console.error(
+      'Unhandled error:',
+      err
+    );
+
+    return res
+      .status(500)
+      .json({
+        success: false,
+        message:
+          'Internal server error'
+      });
+  }
+);
+
+
+/* =========================================================
+   START SERVER
 ========================================================= */
 
 app.listen(
@@ -4770,18 +1825,6 @@ app.listen(
 
     console.log(
       `ZX backend running on ${PORT}`
-    );
-
-    console.log(
-      `PenPencil base: ${PENPENCIL_BASE}`
-    );
-
-    console.log(
-      `PenPencil batches path: ${PENPENCIL_BATCHES_PATH}`
-    );
-
-    console.log(
-      `PenPencil max pages: ${MAX_PAGES}`
     );
   }
 );
