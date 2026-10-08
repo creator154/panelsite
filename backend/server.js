@@ -324,35 +324,50 @@ function getSourceBatchId(batch) {
   my-batches returns only one page at a time (20 items).
   Keep asking for next pages until no new batch comes.
 */
+const MAX_PAGES = Number(process.env.PENPENCIL_MAX_PAGES) || 25;
+const MAX_LOGIN_BATCHES = Number(process.env.PENPENCIL_MAX_BATCHES) || 100;
+
+async function fetchBatchPage(page, ppToken) {
+  const sep = PENPENCIL_BATCHES_PATH.includes('?') ? '&' : '?';
+  return penpencilRequest(
+    `${PENPENCIL_BATCHES_PATH}${sep}page=${page}`,
+    ppToken
+  );
+}
+
 async function fetchAllSourceBatches(ppToken) {
   const all = [];
   const seen = new Set();
   let firstData = null;
 
-  for (let page = 1; page <= 25; page++) {
-    const sep = PENPENCIL_BATCHES_PATH.includes('?') ? '&' : '?';
-    let data;
-
-    try {
-      data = await penpencilRequest(
-        `${PENPENCIL_BATCHES_PATH}${sep}page=${page}`,
-        ppToken
-      );
-    } catch (e) {
-      if (page === 1) throw e;
-      break;
+  for (let start = 1; start <= MAX_PAGES; start += 4) {
+    const pages = [];
+    for (let p = start; p < Math.min(start + 4, MAX_PAGES + 1); p++) {
+      pages.push(p);
     }
 
-    if (!firstData) firstData = data;
+    const results = await Promise.all(
+      pages.map(p =>
+        fetchBatchPage(p, ppToken).catch(e => {
+          if (p === 1) throw e;
+          return null;
+        })
+      )
+    );
 
     let added = 0;
 
-    for (const b of sourceArray(data)) {
-      const id = getSourceBatchId(b);
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      all.push(b);
-      added++;
+    for (const data of results) {
+      if (!data) continue;
+      if (!firstData) firstData = data;
+
+      for (const b of sourceArray(data)) {
+        const id = getSourceBatchId(b);
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        all.push(b);
+        added++;
+      }
     }
 
     if (!added) break;
@@ -384,29 +399,54 @@ async function loginWithSourceToken(ppToken) {
 
   if (!list.length) return null;
 
-  const localIds = [];
+  let sourceList = list;
 
-  for (const sb of list) {
-    const srcId = getSourceBatchId(sb);
-    if (!srcId) continue;
-
-    let local = await Batch.findOne({ sourceBatchId: srcId });
-
-    if (!local) {
-      local = await Batch.create({
-        name: String(sb.name || sb.title || 'Source Batch').trim(),
-        category: 'Other Batch Tests',
-        subgroup: '',
-        exam: '',
-        language: 'Hindi',
-        status: 'Paid',
-        active: true,
-        sourceBatchId: srcId
-      });
-    }
-
-    localIds.push(String(local._id));
+  if (sourceList.length > MAX_LOGIN_BATCHES) {
+    console.warn(
+      `Token has ${sourceList.length} batches, keeping first ${MAX_LOGIN_BATCHES}`
+    );
+    sourceList = sourceList.slice(0, MAX_LOGIN_BATCHES);
   }
+
+  const byId = new Map();
+  for (const sb of sourceList) {
+    const id = getSourceBatchId(sb);
+    if (id) byId.set(id, sb);
+  }
+
+  const ids = [...byId.keys()];
+
+  const existing = await Batch.find({ sourceBatchId: { $in: ids } })
+    .select('_id sourceBatchId')
+    .lean();
+
+  const have = new Map(
+    existing.map(b => [String(b.sourceBatchId), String(b._id)])
+  );
+
+  const missing = ids.filter(id => !have.has(id));
+
+  if (missing.length) {
+    const created = await Batch.insertMany(
+      missing.map(id => {
+        const sb = byId.get(id);
+        return {
+          name: String(sb.name || sb.title || 'Source Batch').trim(),
+          category: 'Other Batch Tests',
+          subgroup: '',
+          exam: '',
+          language: 'Hindi',
+          status: 'Paid',
+          active: true,
+          sourceBatchId: id
+        };
+      })
+    );
+
+    created.forEach(b => have.set(String(b.sourceBatchId), String(b._id)));
+  }
+
+  const localIds = ids.map(id => have.get(id)).filter(Boolean);
 
   const token = sign({
     _id: 'source-' + hashToken(ppToken).slice(0, 12),
