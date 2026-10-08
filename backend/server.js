@@ -4761,6 +4761,71 @@ boot().catch(
 
 
 /* =========================================================
+   DEBUG BATCH
+   Temporary route - database check
+========================================================= */
+
+app.get(
+  '/api/debug/batch/:sourceBatchId',
+  async (req, res) => {
+
+    try {
+
+      const batch =
+        await Batch.findOne({
+          sourceBatchId:
+            req.params.sourceBatchId
+        }).lean();
+
+      if (!batch) {
+
+        return res.json({
+          success: false,
+          message: 'Batch not found'
+        });
+      }
+
+      const tests =
+        await Test.find({
+          batchId: batch._id
+        }).lean();
+
+      return res.json({
+
+        success: true,
+
+        batch,
+
+        testCount:
+          tests.length,
+
+        tests
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        'Debug batch error:',
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+
+          success: false,
+
+          error:
+            error.message
+
+        });
+    }
+  }
+);
+
+
+/* =========================================================
    START
 ========================================================= */
 
@@ -4783,5 +4848,6 @@ app.listen(
     console.log(
       `PenPencil max pages: ${MAX_PAGES}`
     );
+
   }
 );
