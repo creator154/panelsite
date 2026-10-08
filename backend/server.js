@@ -451,6 +451,7 @@ async function loginWithSourceToken(ppToken) {
 
   let list = null;
   let basePath = '';
+  const notes = [];
 
   for (const cand of candidates) {
     try {
@@ -462,6 +463,8 @@ async function loginWithSourceToken(ppToken) {
         chk.ok ? 'USER-SPECIFIC' : 'not usable - ' + chk.reason
       );
 
+      notes.push(cand + ' => ' + (chk.ok ? 'ok' : chk.reason));
+
       if (chk.ok) {
         basePath = cand;
         list = (await fetchAllSourceBatches(ppToken, cand)).batches;
@@ -469,6 +472,7 @@ async function loginWithSourceToken(ppToken) {
       }
     } catch (e) {
       console.log('Batch route probe:', cand, 'failed:', e.message);
+      notes.push(cand + ' => failed: ' + e.message);
     }
   }
 
@@ -476,7 +480,8 @@ async function loginWithSourceToken(ppToken) {
     console.error('No user-specific batch route worked for this token');
     return {
       success: false,
-      message: 'Could not load batches for this token'
+      message:
+        'Could not load batches for this token\n' + notes.join('\n')
     };
   }
 
