@@ -3362,86 +3362,129 @@ console.log(
         );
 
 
-      /* -----------------------------------------
-         QUESTIONS
-      ----------------------------------------- */
+/* -----------------------------------------
+QUESTIONS
+----------------------------------------- */
 
-      let questions = [];
+  let questions = [];
 
-      const possibleQuestionArrays = [
+  const questionKeys = [
+    'questions',
+    'questionList',
+    'question_list',
+    'testQuestions',
+    'questionData',
+    'items'
+  ];
 
-        source?.questions,
+  function findQuestions(obj, depth = 0, seen = new WeakSet()) {
 
-        source?.questionList,
+    if (
+      !obj ||
+      typeof obj !== 'object' ||
+      depth > 8
+    ) {
+      return [];
+    }
 
-        source?.question_list,
+    if (seen.has(obj)) {
+      return [];
+    }
 
-        source?.question,
+    seen.add(obj);
 
-        source?.data?.questions,
+    /*
+       Direct array response.
+    */
 
-        source?.test?.questions,
+    if (Array.isArray(obj)) {
 
-        source?.result?.questions,
+      const looksLikeQuestions = obj.some(q =>
+        q &&
+        typeof q === 'object' &&
+        (
+          q.question ||
+          q.questionText ||
+          q.questionHtml ||
+          q.question_text ||
+          q.options ||
+          q.answers
+        )
+      );
 
-        source?.items
-
-      ];
-
-      for (
-        const candidate
-        of possibleQuestionArrays
+      if (
+        obj.length > 0 &&
+        looksLikeQuestions
       ) {
+        return obj;
+      }
 
-        if (
-          Array.isArray(
-            candidate
-          )
-        ) {
+      for (const item of obj) {
 
-          questions =
-            candidate;
+        const found = findQuestions(
+          item,
+          depth + 1,
+          seen
+        );
 
-          break;
+        if (found.length > 0) {
+          return found;
         }
       }
 
+      return [];
+    }
 
-      /*
-         Direct array response.
-      */
+    /*
+       Check common question keys.
+    */
 
-      if (
-        !questions.length &&
-        Array.isArray(source)
-      ) {
-
-        questions =
-          source;
-      }
-
-
-      /*
-         Agar sourceData me direct
-         data array hai.
-      */
+    for (const key of questionKeys) {
 
       if (
-        !questions.length &&
-        Array.isArray(
-          sourceData?.data
-        )
+        Array.isArray(obj[key]) &&
+        obj[key].length > 0
       ) {
-
-        questions =
-          sourceData.data;
+        return obj[key];
       }
+    }
+
+    /*
+       Search nested objects.
+    */
+
+    for (const value of Object.values(obj)) {
+
+      const found = findQuestions(
+        value,
+        depth + 1,
+        seen
+      );
+
+      if (found.length > 0) {
+        return found;
+      }
+    }
+
+    return [];
+  }
+
+  questions = findQuestions(sourceData);
+
+  console.log('QUESTIONS EXTRACTOR:', {
+    sourceTestId,
+    questionsFound: questions.length,
+    firstQuestionKeys:
+      questions[0] &&
+      typeof questions[0] === 'object'
+        ? Object.keys(questions[0])
+        : []
+  });
 
 
-      /* -----------------------------------------
-         VALIDATE QUESTIONS
-      ----------------------------------------- */
-
+  /* -----------------------------------------
+     VALIDATE QUESTIONS
+  ----------------------------------------- */
       if (!Array.isArray(questions) || questions.length === 0) {
 
         console.error('Questions not found:', {
