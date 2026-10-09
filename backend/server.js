@@ -3224,23 +3224,38 @@ app.post(
               : 'NO CONFIG'
           );
 
-          console.log(
-            'FALLBACK CONFIG JSON:',
-            JSON.stringify(
-              sourceData?.config || null,
-              null,
-              2
-            )
-          );
+console.log(
+  'FALLBACK CONFIG JSON:',
+  JSON.stringify(
+    sourceData?.config || null,
+    null,
+    2
+  )
+);
 
-        } else {
-          throw detailError;
-        }
-      }
+console.log(
+  'SOURCE DATA SAMPLE:',
+  JSON.stringify(sourceData, (key, value) => {
+    if (
+      ['token', 'authorization', 'password', 'cookie'].includes(
+        key.toLowerCase()
+      )
+    ) {
+      return '[REDACTED]';
+    }
 
-      /* -----------------------------------------
-         NORMALIZE SOURCE RESPONSE
-      ----------------------------------------- */
+    return value;
+  }).slice(0, 12000)
+);
+
+} else {
+  throw detailError;
+}
+}
+
+/* -----------------------------------------
+   NORMALIZE SOURCE RESPONSE
+----------------------------------------- */
       let source =
         sourceData;
 
