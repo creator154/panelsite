@@ -3363,100 +3363,73 @@ console.log(
 
 
 /* -----------------------------------------
-QUESTIONS
+   QUESTIONS
 ----------------------------------------- */
 
-  let questions = [];
+let questions = [];
 
-  const questionKeys = [
-    'questions',
-    'questionList',
-    'question_list',
-    'testQuestions',
-    'questionData',
-    'items'
-  ];
+const questionKeys = [
+  'questions',
+  'questionList',
+  'question_list',
+  'testQuestions',
+  'test_questions',
+  'questionData',
+  'questionDetails',
+  'question_details',
+  'items'
+];
 
-  function findQuestions(obj, depth = 0, seen = new WeakSet()) {
+function findQuestions(obj, depth = 0, seen = new WeakSet()) {
+
+  if (
+    !obj ||
+    typeof obj !== 'object' ||
+    depth > 12
+  ) {
+    return [];
+  }
+
+  if (seen.has(obj)) {
+    return [];
+  }
+
+  seen.add(obj);
+
+  /*
+     Direct array response.
+  */
+
+  if (Array.isArray(obj)) {
+
+    const looksLikeQuestions = obj.some(q =>
+      q &&
+      typeof q === 'object' &&
+      !Array.isArray(q) &&
+      (
+        q.question ||
+        q.questionText ||
+        q.questionHtml ||
+        q.question_text ||
+        q.questionBody ||
+        q.questionId ||
+        q.question_id ||
+        q.options ||
+        q.answers
+      )
+    );
 
     if (
-      !obj ||
-      typeof obj !== 'object' ||
-      depth > 8
+      obj.length > 0 &&
+      looksLikeQuestions
     ) {
-      return [];
+      return obj;
     }
 
-    if (seen.has(obj)) {
-      return [];
-    }
-
-    seen.add(obj);
-
-    /*
-       Direct array response.
-    */
-
-    if (Array.isArray(obj)) {
-
-      const looksLikeQuestions = obj.some(q =>
-        q &&
-        typeof q === 'object' &&
-        (
-          q.question ||
-          q.questionText ||
-          q.questionHtml ||
-          q.question_text ||
-          q.options ||
-          q.answers
-        )
-      );
-
-      if (
-        obj.length > 0 &&
-        looksLikeQuestions
-      ) {
-        return obj;
-      }
-
-      for (const item of obj) {
-
-        const found = findQuestions(
-          item,
-          depth + 1,
-          seen
-        );
-
-        if (found.length > 0) {
-          return found;
-        }
-      }
-
-      return [];
-    }
-
-    /*
-       Check common question keys.
-    */
-
-    for (const key of questionKeys) {
-
-      if (
-        Array.isArray(obj[key]) &&
-        obj[key].length > 0
-      ) {
-        return obj[key];
-      }
-    }
-
-    /*
-       Search nested objects.
-    */
-
-    for (const value of Object.values(obj)) {
+    for (const item of obj) {
 
       const found = findQuestions(
-        value,
+        item,
         depth + 1,
         seen
       );
@@ -3469,46 +3442,107 @@ QUESTIONS
     return [];
   }
 
-  questions = findQuestions(sourceData);
+  /*
+     Check common question keys.
+  */
 
-  console.log('QUESTIONS EXTRACTOR:', {
+  for (const key of questionKeys) {
+
+    if (
+      Array.isArray(obj[key]) &&
+      obj[key].length > 0
+    ) {
+
+      const found = findQuestions(
+        obj[key],
+        depth + 1,
+        seen
+      );
+
+      if (found.length > 0) {
+        return found;
+      }
+    }
+  }
+
+  /*
+     Search nested objects.
+  */
+
+  for (const value of Object.values(obj)) {
+
+    const found = findQuestions(
+      value,
+      depth + 1,
+      seen
+    );
+
+    if (found.length > 0) {
+      return found;
+    }
+  }
+
+  return [];
+}
+
+questions = findQuestions(sourceData);
+
+console.log('QUESTIONS EXTRACTOR:', {
+  sourceTestId,
+  questionsFound: questions.length,
+
+  sourceDataKeys:
+    sourceData && typeof sourceData === 'object'
+      ? Object.keys(sourceData)
+      : [],
+
+  firstQuestionKeys:
+    questions[0] &&
+    typeof questions[0] === 'object'
+      ? Object.keys(questions[0])
+      : []
+});
+
+
+/* -----------------------------------------
+   VALIDATE QUESTIONS
+----------------------------------------- */
+
+if (!Array.isArray(questions) || questions.length === 0) {
+
+  console.error('Questions not found:', {
     sourceTestId,
-    questionsFound: questions.length,
-    firstQuestionKeys:
-      questions[0] &&
-      typeof questions[0] === 'object'
-        ? Object.keys(questions[0])
+    title,
+
+    sourceKeys:
+      source && typeof source === 'object'
+        ? Object.keys(source)
+        : [],
+
+    sourceDataKeys:
+      sourceData && typeof sourceData === 'object'
+        ? Object.keys(sourceData)
         : []
   });
 
+  return res.status(422).json({
+    success: false,
+    message: 'Questions nahi mile. Test save nahi hua.',
+    sourceTestId,
+    title,
+    questionsFound: 0,
 
-  /* -----------------------------------------
-     VALIDATE QUESTIONS
-  ----------------------------------------- */
-      if (!Array.isArray(questions) || questions.length === 0) {
-
-        console.error('Questions not found:', {
-          sourceTestId,
-          title,
-          sourceKeys:
-            source && typeof source === 'object'
-              ? Object.keys(source)
-              : []
-        });
-
-        return res.status(422).json({
-          success: false,
-          message: 'Questions nahi mile. Test save nahi hua.',
-          sourceTestId,
-          title,
-          questionsFound: 0
-        });
-      }
+    sourceDataKeys:
+      sourceData && typeof sourceData === 'object'
+        ? Object.keys(sourceData)
+        : []
+  });
+}
 
 
-      /* -----------------------------------------
-         CREATE LOCAL TEST
-      ----------------------------------------- */
+/* -----------------------------------------
+   CREATE LOCAL TEST
+----------------------------------------- */
 
       const item =
         await Test.create({
